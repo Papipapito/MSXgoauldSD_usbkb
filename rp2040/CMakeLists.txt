@@ -14,6 +14,7 @@ set(FAMILY rp2040)
 add_executable(goauld_friend
     src/main.c
     src/usbin.c
+    src/xinput_host.c
 )
 
 # Generate the WS2812 (status LED) PIO header for the RP2040-Zero on-board NeoPixel.

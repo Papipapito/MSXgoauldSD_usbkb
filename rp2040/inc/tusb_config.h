@@ -51,6 +51,7 @@
 #define CFG_TUH_DEVICE_MAX          6
 
 #define CFG_TUH_HID                 16
+#define CFG_TUH_XINPUT              1   // Ryzee119 XInput host driver: number of XInput pads (Xbox / dongles)
 #define CFG_TUH_HID_EPIN_BUFSIZE    128 // default 64
 #define CFG_TUH_HID_EPOUT_BUFSIZE   128 // default 64
 

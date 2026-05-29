@@ -30,6 +30,7 @@
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include <string.h>
+#include "xinput_host.h"  // vendored Ryzee119 XInput host driver (MIT) -> same joystick path
 
 // ---------------------------------------------------------------------------
 // MSX Goa'uld keyboard link -- event-driven make/break model.
@@ -681,6 +682,62 @@ void tuh_kb_set_leds(uint8_t leds) {
 		tuh_hid_set_report(keyboards[i].dev_addr, keyboards[i].instance, 0, HID_REPORT_TYPE_OUTPUT, &kb_leds, sizeof(kb_leds));
 		}
 	}
+}
+
+// ===========================================================================
+// USB XInput (Xbox-style) gamepads -> SAME MSX joystick path as the HID pads.
+// Driver: Ryzee119/tusb_xinput (MIT), registered below via the app-driver hook.
+// Covers Xbox 360 / One / Series and most 2.4GHz "XInput-mode" dongles, which
+// the built-in HID host cannot claim. The HID keyboard + HID gamepad paths are
+// completely untouched.
+// ===========================================================================
+
+// Register the vendored XInput class driver ALONGSIDE TinyUSB's built-in host
+// drivers (HID keyboard/gamepad keep working; this is additive).
+usbh_class_driver_t const* usbh_app_driver_get_cb(uint8_t* driver_count) {
+    *driver_count = 1;
+    return &usbh_xinput_driver;
+}
+
+void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_interface_t* xinput_itf) {
+    (void)xinput_itf;
+    // Xbox 360 wired/wireless: pick an LED quadrant (harmless on other types).
+    tuh_xinput_set_led(dev_addr, instance, 0, true);
+    tuh_xinput_set_led(dev_addr, instance, 1, true);
+    tuh_xinput_set_rumble(dev_addr, instance, 0, 0, true);
+    g_joy_mounted = 1;                              // status LED -> yellow
+    joy_set_state(0, 0);                            // clean baseline (no dir/fire)
+    tuh_xinput_receive_report(dev_addr, instance);  // start polling
+}
+
+void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance) {
+    (void)dev_addr; (void)instance;
+    g_joy_mounted = 0;
+    joy_set_state(0, 0);                            // release direction/fire
+}
+
+void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance,
+                                   xinputh_interface_t const* xid_itf, uint16_t len) {
+    (void)len;
+    const xinput_gamepad_t* p = &xid_itf->pad;
+    if (xid_itf->connected && xid_itf->new_pad_data) {
+        uint8_t b = 0;
+        // D-pad
+        if (p->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) b |= JOY_RIGHT;
+        if (p->wButtons & XINPUT_GAMEPAD_DPAD_LEFT)  b |= JOY_LEFT;
+        if (p->wButtons & XINPUT_GAMEPAD_DPAD_DOWN)  b |= JOY_DOWN;
+        if (p->wButtons & XINPUT_GAMEPAD_DPAD_UP)    b |= JOY_UP;
+        // Left stick: XInput Y is +up; MSX "up" is active bit3. Half-scale deadzone.
+        if (p->sThumbLX >  JOY_AXIS_T) b |= JOY_RIGHT;
+        if (p->sThumbLX < -JOY_AXIS_T) b |= JOY_LEFT;
+        if (p->sThumbLY < -JOY_AXIS_T) b |= JOY_DOWN;
+        if (p->sThumbLY >  JOY_AXIS_T) b |= JOY_UP;
+        // Buttons: A -> trigger A (fire 1), B -> trigger B (fire 2)
+        if (p->wButtons & XINPUT_GAMEPAD_A) b |= JOY_A;
+        if (p->wButtons & XINPUT_GAMEPAD_B) b |= JOY_B;
+        joy_set_state(0, b);
+    }
+    tuh_xinput_receive_report(dev_addr, instance);  // re-arm polling
 }
 
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, u16 desc_len) {
