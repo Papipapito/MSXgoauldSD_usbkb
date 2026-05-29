@@ -5,19 +5,23 @@
 
 The MSX Goa'uld Guardian Angel for hard tasks.
 
-## Wiring
+## Wiring (1-wire, RP2040 -> FPGA)
 
-| Device                   | Function   | Pin       | Connection Note                  |
-|--------------------------|------------|-----------|----------------------------------|
-| Tang Nano 20k UART TX    | UART TX    | 79        | Connect to RX of RP2040          |
-| Tang Nano 20k UART RX    | UART RX    | 80        | Connect to TX of RP2040          |
-| RP2040 UART TX           | UART TX    | GPIO 0    | Connect to RX of Tang Nano 20k   |
-| RP2040 UART RX           | UART RX    | GPIO 1    | Connect to TX of Tang Nano 20k   |
+Data is one-directional (RP2040 transmits, FPGA receives) plus a common ground.
+The RP2040 is the USB host for the keyboard and is powered from the MSX 5V rail.
 
-- 090 and 080 wirings are not compatible
-- built only for [waveshare RP2040 Zero](https://www.waveshare.com/w/upload/2/2b/RP2040-Zero-details-7.jpg), builtin LED is GPIO16
-- both FPGA and RP2040 must have compatible firmwares together
-- Make sure to power Raspberry Pi Pico to MSX 5V power supply to Vout (or Vbus) pin
+| Device            | Function       | Pin    | Connection Note                          |
+|-------------------|----------------|--------|------------------------------------------|
+| RP2040 UART0 TX   | UART TX (data) | GPIO 0 | -> Tang Nano 20K pin 75 (kbd_uart_rx_pin)|
+| RP2040 GND        | Ground         | GND    | -> Tang Nano 20K GND (common ground)     |
+| RP2040 VBUS/VSYS  | 5V power in    | VBUS   | -> MSX +5V                               |
+| Tang Nano 20K RX  | UART RX (data) | 75     | <- RP2040 GPIO0 (only the FPGA receives) |
+
+- UART **115200 8N1**, idle-high, LSB-first; data flows RP2040 -> FPGA only.
+- 3.3 V LVCMOS both ends - direct connection, no level shifter.
+- built for the [Waveshare RP2040 Zero](https://www.waveshare.com/wiki/RP2040-Zero) (builtin LED GPIO16); for a Pico add `-DRP2040_ZERO=0`.
+- both FPGA and RP2040 firmwares must be the matching pair on this branch.
+- power the RP2040 from the MSX 5V supply to its VBUS/VSYS pin.
 
 ## Build Instructions
 
@@ -28,7 +32,7 @@ Before build, make sure to:
 
 ```
 mkdir build && cd build
-rm -rf * && cmake -DFAMILY=rp2040 -DBOARD=raspberry_pi_pico -G Ninja .. && cmake --build .
+cmake -G Ninja .. && ninja      # default = Waveshare RP2040-Zero; add -DRP2040_ZERO=0 for a Pico
 ```
 
 ## Some ideas

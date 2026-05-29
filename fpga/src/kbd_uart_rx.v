@@ -270,24 +270,19 @@ module kbd_uart_rx #(
                     end
 
                     //--------------------------------------------------------
-                    // D_LOAD: counted full-matrix load. Each byte fills the next
-                    // row (0..10). Finish on the 0xFF terminator or after 11 rows,
-                    // whichever comes first. 0xFF means "stop, do not store" so it
-                    // is never written into a matrix row (rows are active-low so a
-                    // legitimate all-released row is also 0xFF, but it would only
-                    // appear as one of the 11 data bytes, never as the terminator).
+                    // D_LOAD: counted full-matrix resync. Store EVERY byte into the
+                    // next row (0..10); after row 10 return to D_IDLE. Do NOT treat
+                    // a data 0xFF as a terminator: 0xFF is the normal "row all-
+                    // released" state (active-low), so an early-out on 0xFF would
+                    // abort almost every resync (row 0 is usually 0xFF). The trailing
+                    // 0xFF lands in D_IDLE and is ignored (no opcode match -> default).
                     //--------------------------------------------------------
                     D_LOAD: begin
-                        if (rx_byte == 8'hFF) begin
-                            // Terminator: stop loading without storing it.
-                            dstate <= D_IDLE;
+                        vkey_matrix[load_idx] <= rx_byte;   // store every byte
+                        if (load_idx == 4'd10) begin
+                            dstate <= D_IDLE;               // 11 rows (0..10) loaded
                         end else begin
-                            vkey_matrix[load_idx] <= rx_byte;
-                            if (load_idx == 4'd10) begin
-                                dstate <= D_IDLE;          // 11 rows loaded (0..10)
-                            end else begin
-                                load_idx <= load_idx + 1'b1;
-                            end
+                            load_idx <= load_idx + 1'b1;
                         end
                     end
 
