@@ -17,7 +17,7 @@
 // gpio_put() cannot speak the 800kHz NeoPixel protocol. Raspberry Pi Pico: a
 // plain mono LED on GPIO25. States (see the main loop):
 //   boot                 -> blue blink (you can see it powered up)
-//   idle (no USB kbd)     -> slow blue heartbeat
+//   idle (no USB kbd)     -> solid red
 //   USB keyboard mounted  -> solid green
 //   key pressed           -> brief white flash
 #ifndef RP2040_ZERO
@@ -128,7 +128,7 @@ int main() {
         uint32_t led;
         if      ((uint64_t)(now - g_last_key_us) < 70000ull) led = 0x202020u;  // white flash on keypress
         else if (isMounted)                                  led = 0x002000u;  // green: USB keyboard ready
-        else                                                 led = ((now / 500000ull) & 1ull) ? 0x000020u : 0x000000u; // blue heartbeat
+        else                                                 led = 0x1A0000u;  // red: no USB keyboard connected
         if (led != led_prev) {
             status_led_rgb((uint8_t)(led >> 16), (uint8_t)(led >> 8), (uint8_t)led);
             led_prev = led;
