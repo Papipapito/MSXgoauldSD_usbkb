@@ -53,6 +53,19 @@
 #define RESYNC_START   0xFE
 #define RESYNC_END     0xFF
 
+// Generic USB HID gamepad/joystick -> MSX joystick port.
+//   0xB0 <port> <joybyte>   port: 0 = MSX port 1, 1 = MSX port 2
+//   joybyte ACTIVE-HIGH (1 = pressed): bit0=Right bit1=Left bit2=Down
+//   bit3=Up bit4=A(TrigA/fire1) bit5=B(TrigB/fire2) bits6-7=0.
+//   (The FPGA inverts to MSX active-low.)
+#define OP_JOY         0xB0
+#define JOY_RIGHT      0x01
+#define JOY_LEFT       0x02
+#define JOY_DOWN       0x04
+#define JOY_UP         0x08
+#define JOY_A          0x10
+#define JOY_B          0x20
+
 // Derived-modifier bit positions (logical, OR of L/R HID bits).
 #define DRV_SHIFT      0x01
 #define DRV_CTRL       0x02
@@ -129,6 +142,32 @@ void kb_send_resync(void) {
     tx_push(RESYNC_END);
 }
 
+// ---------------------------------------------------------------------------
+// Joystick link. Active-high shadow of the two MSX joystick ports; we send the
+// 3-byte 0xB0 frame only when a port's byte changes (non-blocking, via the same
+// TX ring the keyboard uses), and re-emit both ports on every 250 ms resync.
+// ---------------------------------------------------------------------------
+static uint8_t joy_state[2] = {0, 0};   // active-high shadow, indexed by port
+
+// Send-on-change: update the shadow and emit 0xB0 <port> <byte> when it changes.
+static void joy_set_state(uint8_t port, uint8_t b) {
+    if(port > 1 || b == joy_state[port]) return;
+    joy_state[port] = b;
+    tx_push(OP_JOY);
+    tx_push(port);
+    tx_push(b);
+}
+
+// Re-emit both joystick ports (self-heals any dropped 0xB0 byte). Mirrors
+// kb_send_resync(); called from the 250 ms resync block in main.c.
+void joy_send_resync(void) {
+    for(uint8_t p = 0; p < 2; p++) {
+        tx_push(OP_JOY);
+        tx_push(p);
+        tx_push(joy_state[p]);
+    }
+}
+
 // Initialize the dedicated keyboard UART link: uart0 @ 115200 8N1, GPIO0=TX.
 // This is the ONLY owner of uart0 -- stdio must not be routed here (see main.c).
 void kb_uart_init(void) {
@@ -161,6 +200,33 @@ struct {
   u8 dev_addr;
   u8 instance;
 } keyboards[8];
+
+// Generic HID gamepads/joysticks. Mirrors keyboards[]: a registered (addr,inst)
+// is one whose parsed top-level collection is Generic Desktop / Game Pad (0x05)
+// or Joystick (0x04). Used to route reports to gamepad_report_receive().
+struct {
+  u8 dev_addr;
+  u8 instance;
+} gamepads[8];
+
+// True if a parsed top-level collection is a generic-desktop gamepad/joystick.
+static inline bool is_gamepad_usage(const hid_report_info_t *info) {
+  return info != NULL &&
+         info->usage_page == HID_USAGE_PAGE_DESKTOP &&
+         (info->usage == HID_USAGE_DESKTOP_GAMEPAD ||
+          info->usage == HID_USAGE_DESKTOP_JOYSTICK);
+}
+
+// True if instance `inst` of `dev_addr` is registered as a gamepad.
+static bool is_registered_gamepad(u8 dev_addr, u8 instance) {
+  for(u8 i = 0; i < 8; i++) {
+    if(gamepads[i].dev_addr == dev_addr && gamepads[i].instance == instance &&
+       (gamepads[i].dev_addr != 0 || gamepads[i].instance != 0)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, u8 type, u16 page, u8 bit, const hid_report_item_t **item) {
   for(u8 i = 0; i < report_info_arr->num_items; i++) {
@@ -509,6 +575,91 @@ void kb_report_receive(uint8_t modifiers, uint8_t const* report, u16 len) {
 	memcpy(prev_keys, report, len);
 }
 
+// Digital threshold on the SCALED axis value. to_signed_value() centers the
+// axis at 0 and left-justifies it into a signed 16-bit range (+-32767),
+// independent of the axis' native bit width, so a fixed scaled threshold ==
+// "half of the logical range" for any resolution. ~16384 = half of full scale.
+#define JOY_AXIS_T 16384
+
+// Translate one generic-HID gamepad/joystick report into the active-high MSX
+// joy byte and push it (send-on-change) to MSX joystick port 0 (MSX port 1).
+//
+// Robustness / assumptions:
+//  * Usage-based parsing only (works across pad layouts, no per-VID quirks).
+//  * X axis = Generic Desktop / X (0x30), Y = Y (0x31); thresholded to digital.
+//  * Hat switch (0x39): 0=N,1=NE,2=E,3=SE,4=S,5=SW,6=W,7=NW, >=8 centered;
+//    decoded to U/D/L/R and OR'd with the axis result so pads exposing a hat,
+//    analog stick, or both all work.
+//  * Buttons = Button page (0x09): button 1 -> A (fire1), button 2 -> B (fire2).
+//  * `report`/`len` here have already had any report-ID byte stripped by the
+//    caller, and `rpt_info` is the matching parsed collection.
+//  * If the pad exposes neither X/Y nor a hat we still process buttons; a pad
+//    with no usable controls simply yields byte 0 (idle).
+void gamepad_report_receive(uint8_t dev_addr, uint8_t instance, uint8_t const* report, u16 len) {
+  hid_report_info_t* rpt_info_arr = hid_info[instance].report_info;
+  hid_report_info_t* rpt_info = NULL;
+
+  // Resolve the collection for this report exactly like the keyboard path:
+  // single report w/ id 0 -> first collection; otherwise match the report-id.
+  if(hid_info[instance].report_count == 1 && rpt_info_arr[0].report_id == 0) {
+    rpt_info = &rpt_info_arr[0];
+  } else {
+    uint8_t const rpt_id = report[0];
+    for(uint8_t i = 0; i < hid_info[instance].report_count; i++) {
+      if(rpt_id == rpt_info_arr[i].report_id) { rpt_info = &rpt_info_arr[i]; break; }
+    }
+    report++;
+    len--;
+  }
+  if(!rpt_info || !is_gamepad_usage(rpt_info)) return;
+
+  uint8_t byte = 0;
+  const hid_report_item_t *item;
+
+  // ---- Analog X/Y axes -> digital directions (thresholded) ----
+  if(hid_parse_find_item_by_usage(rpt_info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_X, &item)) {
+    s32 x = to_signed_value(item, report, len);
+    if(x < -JOY_AXIS_T) byte |= JOY_LEFT;
+    if(x >  JOY_AXIS_T) byte |= JOY_RIGHT;
+  }
+  if(hid_parse_find_item_by_usage(rpt_info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_Y, &item)) {
+    s32 y = to_signed_value(item, report, len);
+    if(y < -JOY_AXIS_T) byte |= JOY_UP;     // HID +Y is down; up = small/negative
+    if(y >  JOY_AXIS_T) byte |= JOY_DOWN;
+  }
+
+  // ---- Hat switch -> directions, OR'd with the axis result ----
+  if(hid_parse_find_item_by_usage(rpt_info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_HAT_SWITCH, &item)) {
+    s32 hat = 0;
+    if(hid_parse_get_item_value(item, report, len, &hat)) {
+      // Normalize to 0..7 using the logical minimum (some pads report 1..8).
+      hat -= item->attributes.logical.min;
+      switch(hat) {
+        case 0: byte |= JOY_UP;               break; // N
+        case 1: byte |= JOY_UP   | JOY_RIGHT; break; // NE
+        case 2: byte |= JOY_RIGHT;            break; // E
+        case 3: byte |= JOY_DOWN | JOY_RIGHT; break; // SE
+        case 4: byte |= JOY_DOWN;             break; // S
+        case 5: byte |= JOY_DOWN | JOY_LEFT;  break; // SW
+        case 6: byte |= JOY_LEFT;             break; // W
+        case 7: byte |= JOY_UP   | JOY_LEFT;  break; // NW
+        default: break;                              // >=8 (or out of range) = centered
+      }
+    }
+  }
+
+  // ---- Buttons (Button page): button 1 -> A, button 2 -> B ----
+  if(hid_parse_find_bit_item_by_page(rpt_info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 0, &item)) {
+    if(to_bit_value(item, report, len)) byte |= JOY_A;
+  }
+  if(hid_parse_find_bit_item_by_page(rpt_info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 1, &item)) {
+    if(to_bit_value(item, report, len)) byte |= JOY_B;
+  }
+
+  (void)dev_addr;
+  joy_set_state(0, byte);   // route to MSX joystick port 1 (port index 0)
+}
+
 void tuh_kb_set_leds(uint8_t leds) {
 	for(uint8_t i = 0; i < 8; i++) {
 		if(keyboards[i].dev_addr != 0) {
@@ -549,6 +700,25 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 			memset(prev_keys, 0, sizeof(prev_keys));
 			prev_derived = 0;
 			kb_send_resync();
+		} else {
+			// Generic HID: detect a gamepad/joystick by its parsed top-level
+			// collection (Generic Desktop / Game Pad 0x05 or Joystick 0x04).
+			// Such devices enumerate with interface protocol NONE, so we key off
+			// the report descriptor already parsed into hid_info[instance].
+			bool is_pad = false;
+			for(uint8_t r = 0; r < hid_info[instance].report_count; r++) {
+				if(is_gamepad_usage(&hid_info[instance].report_info[r])) { is_pad = true; break; }
+			}
+			if(is_pad) {
+				for(uint8_t i = 0; i < 8; i++) {
+					if(gamepads[i].dev_addr == 0 && gamepads[i].instance == 0) {
+						gamepads[i].dev_addr = dev_addr;
+						gamepads[i].instance = instance;
+						break;
+					}
+				}
+				joy_set_state(0, 0); // clean baseline: no direction/fire held
+			}
 		}
 		isMounted = 1; board_led_write(1);
 	}
@@ -568,9 +738,30 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
 	memset(prev_keys, 0, sizeof(prev_keys));
 	prev_derived = 0;
 	kb_send_resync();
+
+	// If a gamepad unmounted, drop its slot and release the joystick so no
+	// direction/fire stays stuck on the MSX side.
+	for(uint8_t i = 0; i < 8; i++) {
+		if(gamepads[i].dev_addr == dev_addr && gamepads[i].instance == instance &&
+		   (gamepads[i].dev_addr != 0 || gamepads[i].instance != 0)) {
+			gamepads[i].dev_addr = 0;
+			gamepads[i].instance = 0;
+			joy_set_state(0, 0);
+			break;
+		}
+	}
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, u16 len) {
+	// Generic HID gamepad/joystick: handle and re-arm here, leaving the keyboard
+	// path below completely untouched. gamepad_report_receive() does its own
+	// report-ID resolution on the raw report (same as the keyboard path).
+	if(is_registered_gamepad(dev_addr, instance)) {
+		gamepad_report_receive(dev_addr, instance, report, len);
+		tuh_hid_receive_report(dev_addr, instance);
+		return;
+	}
+
 	hid_report_info_t* rpt_info_arr = hid_info[instance].report_info;
 	hid_report_info_t* rpt_info = NULL;
 

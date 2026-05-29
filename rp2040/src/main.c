@@ -120,6 +120,7 @@ int main() {
         // Periodic full-matrix resync (also self-heals any dropped byte).
         if ((int64_t)(now - next_resync) >= 0) {
             kb_send_resync();
+            joy_send_resync();   // re-emit both MSX joystick ports (0xB0 frames)
             kb_tx_pump();
             next_resync = now + RESYNC_INTERVAL_US;
         }

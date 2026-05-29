@@ -482,9 +482,14 @@ end
                      // USB-keyboard merge: on an I/O 0xA9 keyboard-column read,
                      // AND the physical PPI read (bus_data) with the virtual
                      // matrix row. Both are active-low, so a key pressed on
-                     // EITHER keyboard pulls its bit to 0. All other reads fall
-                     // through to bus_data unchanged.
-                     ( kbd_a9_req_r ) ? (bus_data & vkey_row) : bus_data;
+                     // EITHER keyboard pulls its bit to 0.
+                     // USB-joystick merge: on a PSG reg-14 read (I/O 0xA2 while
+                     // reg 14 is selected), AND the real MSX joystick read
+                     // (bus_data) with the USB joystick. Both active-low, so a
+                     // direction/button on EITHER pad pulls its bit to 0.
+                     // All other reads fall through to bus_data unchanged.
+                     ( kbd_a9_req_r ) ? (bus_data & vkey_row) :
+                     ( psg_a2_reg14_req_r ) ? (bus_data & psg_joy_inject) : bus_data;
     end
 
 
@@ -725,6 +730,54 @@ end
     wire kbd_a9_req_r = (bus_addr[7:0] == 8'ha9 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
     wire [7:0] vkey_row;
 
+    //----------------------------------------------------------------
+    //-- USB joystick (virtual, fed by UART from RP2040 via kbd_uart_rx)
+    //--   The MSX reads joysticks through the PSG: I/O 0xA0 selects the
+    //--   register, 0xA1 writes it, 0xA2 reads it. Our internal PSG is
+    //--   audio-only (its data output is unconnected), so the joystick read
+    //--   at 0xA2 (PSG reg 14) is served by the REAL MSX over the external
+    //--   bus and falls through the cpu_din mux to bus_data. We snoop the
+    //--   PSG register select (0xA0 write) and the port-select bits in PSG
+    //--   reg 15 (0xA1 write, bits[7:6], active-low), then AND-merge the USB
+    //--   joystick into the 0xA2/reg14 read so BOTH the real MSX joystick and
+    //--   the USB joystick work simultaneously. This block only OBSERVES the
+    //--   bus; it never drives the data bus. All in clk_54m.
+    //----------------------------------------------------------------
+    // Latch the PSG register number written via I/O 0xA0.
+    reg [3:0] psg_addr_latch;
+    always @(posedge clk_54m or negedge bus_reset_n)
+        if (!bus_reset_n) psg_addr_latch <= 4'd0;
+        else if (bus_addr[7:0] == 8'hA0 && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1)
+            psg_addr_latch <= cpu_dout[3:0];
+
+    // PSG reg 15 (Port B) write: bits[7:6] select the joystick port (active-low).
+    // bit6=0 -> port 1 (joy0), bit7=0 -> port 2 (joy1).
+    reg [1:0] psg_reg15_joy_sel;
+    always @(posedge clk_54m or negedge bus_reset_n)
+        if (!bus_reset_n) psg_reg15_joy_sel <= 2'b11;
+        else if (bus_addr[7:0] == 8'hA1 && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1
+                 && psg_addr_latch == 4'd15)
+            psg_reg15_joy_sel <= cpu_dout[7:6];
+
+    // True during a PSG reg-14 read (I/O 0xA2 read while reg 14 is selected).
+    wire psg_a2_reg14_req_r = (bus_addr[7:0] == 8'hA2 && bus_iorq_n == 0 && bus_m1_n == 1
+                               && bus_rd_n == 0 && psg_addr_latch == 4'd14);
+
+    // USB joystick state from the UART receiver (active-high as received).
+    wire [7:0] joy_usb0;
+    wire [7:0] joy_usb1;
+
+    // Remap active-high USB byte (bit0=R,1=L,2=D,3=U,4=A,5=B) to the MSX PSG
+    // Port A active-low layout (bit0=Up,1=Down,2=Left,3=Right,4=TrigA,5=TrigB).
+    wire [7:0] joy0_msx = {2'b11, ~joy_usb0[5], ~joy_usb0[4], ~joy_usb0[0], ~joy_usb0[1], ~joy_usb0[2], ~joy_usb0[3]};
+    wire [7:0] joy1_msx = {2'b11, ~joy_usb1[5], ~joy_usb1[4], ~joy_usb1[0], ~joy_usb1[1], ~joy_usb1[2], ~joy_usb1[3]};
+
+    // Select the merged value for the currently-selected port; if neither port
+    // is selected, present all-released (0xFF) so the AND-merge is transparent.
+    wire [7:0] psg_joy_inject = (!psg_reg15_joy_sel[0]) ? joy0_msx :
+                                (!psg_reg15_joy_sel[1]) ? joy1_msx :
+                                8'hFF;
+
     //expanded slots 0 & 3
     reg [7:0] exp_slot0;
     wire [1:0] exp_slot0_page;
@@ -910,6 +963,8 @@ end
         .rx                  (kbd_uart_rx_pin),
         .vkey_col            (vkey_col),
         .vkey_row_out        (vkey_row),
+        .joy_state0          (joy_usb0),
+        .joy_state1          (joy_usb1),
         .cmd_scanline_toggle (),
         .cmd_reset_pulse     (),
         .cmd_osd_toggle      ()

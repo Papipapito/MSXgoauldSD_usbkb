@@ -32,6 +32,13 @@
 //       row state), then 0xFF. On 0xFE we enter a counted load (row 0..10),
 //       writing each byte to vkey_matrix[row]; the load finishes on 0xFF or after
 //       11 bytes have been consumed, whichever comes first.
+//     - USB joystick state: 0xB0 <port> <joybyte> (3 bytes). port: 0 = MSX
+//       joystick port 1 (joy_state0), 1 = port 2 (joy_state1). joybyte is
+//       ACTIVE-HIGH: bit0=Right, bit1=Left, bit2=Down, bit3=Up, bit4=A(TrigA),
+//       bit5=B(TrigB), bits6-7 unused. The active-high byte is stored verbatim;
+//       top.v reorders to MSX active-low and AND-merges into the PSG 0xA2 read so
+//       the real MSX joystick still works. Cleared to 0x00 on reset and on the
+//       ~1 s link-loss watchdog (active-high 0 = nothing pressed).
 //============================================================================
 
 `default_nettype none
@@ -46,6 +53,12 @@ module kbd_uart_rx #(
 
     input  wire [3:0]  vkey_col,       // selected keyboard column (PPI port C low nibble)
     output wire [7:0]  vkey_row_out,   // active-low matrix row for vkey_col (combinational)
+
+    // USB joystick state, ACTIVE-HIGH as received (bit0=R,1=L,2=D,3=U,4=A,5=B).
+    // port 0 -> joy_state0 (MSX joystick port 1), port 1 -> joy_state1 (port 2).
+    // top.v reorders to MSX active-low and AND-merges into the PSG 0xA2 read.
+    output reg  [7:0]  joy_state0,
+    output reg  [7:0]  joy_state1,
 
     // v1: pulse outputs, left open at instantiation (Gowin trims them).
     output reg         cmd_scanline_toggle,
@@ -179,19 +192,25 @@ module kbd_uart_rx #(
     reg [7:0] vkey_matrix [0:15];
 
     // Power-on / simulation initial state: everything released (active-low).
+    // USB joystick state is active-high, so 0x00 = nothing pressed.
     integer i;
     initial begin
         for (i = 0; i < 16; i = i + 1)
             vkey_matrix[i] = 8'hFF;
+        joy_state0 = 8'h00;
+        joy_state1 = 8'h00;
     end
 
-    localparam [1:0] D_IDLE = 2'd0,   // waiting for a command/opcode byte
-                     D_CELL = 2'd1,   // expecting the cell byte after 0x90/0xA0
-                     D_LOAD = 2'd2;   // counted full-matrix load after 0xFE
+    localparam [2:0] D_IDLE     = 3'd0,   // waiting for a command/opcode byte
+                     D_CELL     = 3'd1,   // expecting the cell byte after 0x90/0xA0
+                     D_LOAD     = 3'd2,   // counted full-matrix load after 0xFE
+                     D_JOY_PORT = 3'd3,   // expecting the port byte after 0xB0
+                     D_JOY_BYTE = 3'd4;   // expecting the joystick byte after the port
 
-    reg [1:0] dstate      = D_IDLE;
+    reg [2:0] dstate      = D_IDLE;
     reg       pending_make= 1'b0;     // 1 = MAKE (press), 0 = BREAK (release)
     reg [3:0] load_idx    = 4'd0;     // 0..10 row index during full-matrix load
+    reg       joy_port    = 1'b0;     // latched port index from 0xB0 (0 or 1)
 
     // Field extraction from a cell byte: row = bits[3:0], col(bit#) = bits[6:4].
     wire [3:0] cell_row = rx_byte[3:0];
@@ -229,6 +248,9 @@ module kbd_uart_rx #(
             dstate              <= D_IDLE;
             pending_make        <= 1'b0;
             load_idx            <= 4'd0;
+            joy_port            <= 1'b0;
+            joy_state0          <= 8'h00;  // active-high: nothing pressed
+            joy_state1          <= 8'h00;
             cmd_scanline_toggle <= 1'b0;
             cmd_reset_pulse     <= 1'b0;
             cmd_osd_toggle      <= 1'b0;
@@ -249,6 +271,7 @@ module kbd_uart_rx #(
                         case (rx_byte)
                             8'h90: begin pending_make <= 1'b1; dstate <= D_CELL; end // MAKE
                             8'hA0: begin pending_make <= 1'b0; dstate <= D_CELL; end // BREAK
+                            8'hB0: begin                       dstate <= D_JOY_PORT; end // USB joystick
                             8'hFE: begin load_idx <= 4'd0;     dstate <= D_LOAD; end // resync start
                             8'h01: cmd_scanline_toggle <= 1'b1;                       // command
                             8'h02: cmd_reset_pulse     <= 1'b1;                       // command
@@ -266,6 +289,28 @@ module kbd_uart_rx #(
                             // BREAK -> set   bit (released = 1)
                             vkey_matrix[cell_row][cell_bit] <= pending_make ? 1'b0 : 1'b1;
                         end
+                        dstate <= D_IDLE;
+                    end
+
+                    //--------------------------------------------------------
+                    // D_JOY_PORT: this byte is the port index (0 or 1). Only
+                    // bit0 is meaningful (port 0 / port 1); ignore upper bits.
+                    //--------------------------------------------------------
+                    D_JOY_PORT: begin
+                        joy_port <= rx_byte[0];
+                        dstate   <= D_JOY_BYTE;
+                    end
+
+                    //--------------------------------------------------------
+                    // D_JOY_BYTE: this byte is the active-high joystick state.
+                    // Store verbatim into the selected port's register; top.v
+                    // reorders to MSX active-low and AND-merges into 0xA2.
+                    //--------------------------------------------------------
+                    D_JOY_BYTE: begin
+                        if (joy_port == 1'b0)
+                            joy_state0 <= rx_byte;
+                        else
+                            joy_state1 <= rx_byte;
                         dstate <= D_IDLE;
                     end
 
@@ -296,9 +341,12 @@ module kbd_uart_rx #(
                 // clean state in case we were mid-sequence when the link dropped.
                 for (i = 0; i < 16; i = i + 1)
                     vkey_matrix[i] <= 8'hFF;
+                joy_state0   <= 8'h00;   // release USB joystick too (active-high)
+                joy_state1   <= 8'h00;
                 dstate       <= D_IDLE;
                 pending_make <= 1'b0;
                 load_idx     <= 4'd0;
+                joy_port     <= 1'b0;
             end
         end
     end
