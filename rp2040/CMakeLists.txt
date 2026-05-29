@@ -16,6 +16,9 @@ add_executable(goauld_friend
     src/usbin.c
 )
 
+# Generate the WS2812 (status LED) PIO header for the RP2040-Zero on-board NeoPixel.
+pico_generate_pio_header(goauld_friend ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
+
 target_include_directories(goauld_friend PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/inc
     ${CMAKE_CURRENT_LIST_DIR}/src
@@ -26,6 +29,7 @@ target_link_libraries(goauld_friend
     pico_stdlib
     hardware_uart
     hardware_gpio
+    hardware_pio
     tinyusb_host
     tinyusb_board
     pico_multicore

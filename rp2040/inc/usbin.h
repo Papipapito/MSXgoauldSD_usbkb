@@ -61,6 +61,7 @@ extern uint8_t kb_leds;
 extern uint8_t kb_modifiers;
 extern uint8_t kb_keys[120];
 extern uint8_t isMounted;
+extern volatile uint64_t g_last_key_us;  // time_us_64() of the last MAKE; for the status LED
 extern tusb_desc_device_t desc_device;
 
 bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, u8 type, u16 page, u8 bit, const hid_report_item_t **item);

@@ -26,6 +26,7 @@
  *
  */
 #include "usbin.h"
+#include "pico/time.h"   // time_us_64() for the status-LED keypress flash
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include <string.h>
@@ -72,6 +73,7 @@ static uint8_t vmatrix[11];
 static uint8_t prev_keys[16];
 // Previous derived (logical) modifier state: {SHIFT,CTRL,GRAPH,CODE}.
 static uint8_t prev_derived = 0;
+volatile uint64_t g_last_key_us = 0;  // updated on each MAKE; read by the status LED in main.c
 
 // Non-blocking TX ring buffer (drained in main() by kb_tx_pump()).
 static volatile uint8_t txbuf[256];
@@ -98,6 +100,7 @@ void kb_tx_pump(void) {
 
 // Emit a MAKE/BREAK event for a matrix cell and update the shadow matrix.
 static void emit_event(uint8_t op, uint8_t cell) {
+    if(op == OP_MAKE) g_last_key_us = time_us_64();  // for the status-LED keypress flash
     uint8_t row = cell & 0x0F;
     uint8_t bit = (cell >> 4) & 0x07;
     if(row <= 10) {
@@ -510,12 +513,12 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 			prev_derived = 0;
 			kb_send_resync();
 		}
-		board_led_write(1);
+		isMounted = 1; board_led_write(1);
 	}
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
-	board_led_write(0);
+	isMounted = 0; board_led_write(0);
 	for(uint8_t i = 0; i < 8; i++) {
 		if(keyboards[i].dev_addr == dev_addr && keyboards[i].instance == instance) {
 			keyboards[i].dev_addr = 0;
