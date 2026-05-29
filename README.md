@@ -5,8 +5,9 @@
 > **Derived from the great work of:**
 > - **jabadiagm** — MSX Goa'uld: the FPGA MSX2+ engine, board and core. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
 > - **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: the RP2040 USB-host firmware. <https://github.com/Chandler-Kluser/msx-goauld-ga> (itself based on the No0ne / pdaxrom HID parser).
+> - **Ryan Wendland (Ryzee119)** — `tusb_xinput`, the TinyUSB XInput host driver used for Xbox-style pads (MIT). <https://github.com/Ryzee119/tusb_xinput>
 >
-> **What this fork adds:** a virtual **USB keyboard** matrix **and a generic USB HID joystick** merged inside the FPGA (the real keyboard, joysticks, slots and cartridges all keep working), a rewritten RP2040 firmware (non-blocking make/break, modifiers, WS2812 status LED), a hot-swappable **US⇄Spanish** layout, and optional WiFi via an ESP-01S. Code in [`rp2040/`](rp2040/) and [`fpga/`](fpga/); binaries in [Releases](../../releases). **GPLv3** (inherited).
+> **What this fork adds:** a virtual **USB keyboard** matrix **and a USB joystick (generic HID + XInput/Xbox)** merged inside the FPGA (the real keyboard, joysticks, slots and cartridges all keep working), a rewritten RP2040 firmware (non-blocking make/break, modifiers, WS2812 status LED), a hot-swappable **US⇄Spanish** layout, and optional WiFi via an ESP-01S. Code in [`rp2040/`](rp2040/) and [`fpga/`](fpga/); binaries in [Releases](../../releases). **GPLv3** (inherited).
 
 ---
 
