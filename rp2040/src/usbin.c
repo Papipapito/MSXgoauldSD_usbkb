@@ -212,6 +212,9 @@ struct {
 
 // Status-LED aid: nonzero while at least one USB gamepad is registered.
 volatile uint8_t g_joy_mounted = 0;
+// time_us_64() of the last HID device skipped because its report descriptor
+// exceeded CFG_TUH_ENUMERATION_BUFSIZE; drives a violet status-LED flash.
+volatile uint64_t g_hid_skip_us = 0;
 
 // True if a parsed top-level collection is a generic-desktop gamepad/joystick.
 static inline bool is_gamepad_usage(const hid_report_info_t *info) {
@@ -677,6 +680,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 	// This happens if report descriptor length > CFG_TUH_ENUMERATION_BUFSIZE.
 	// Consider increasing #define CFG_TUH_ENUMERATION_BUFSIZE 256 in tusb_config.h
 	if(desc_report == NULL && desc_len == 0) {
+		g_hid_skip_us = time_us_64();   // descriptor too big for the enum buffer -> LED violet
 		// printf("WARNING: HID(%d,%d) skipped!\n", dev_addr, instance);
 		return;
 	}

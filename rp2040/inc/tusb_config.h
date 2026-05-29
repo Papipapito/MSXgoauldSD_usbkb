@@ -45,7 +45,7 @@
 #define CFG_TUH_MEM_ALIGN        __attribute__ ((aligned(4)))
 #endif
 
-#define CFG_TUH_ENUMERATION_BUFSIZE 1024  // was 256; some HID gamepads have large report descriptors
+#define CFG_TUH_ENUMERATION_BUFSIZE 2048  // was 256; some HID gamepads have large report descriptors
 
 #define CFG_TUH_HUB                 2
 #define CFG_TUH_DEVICE_MAX          6
