@@ -2,18 +2,33 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/timer.h"
+#include "hardware/uart.h"
 #include "bsp/board_api.h"
 #include "tusb_config.h"
 #include "class/hid/hid_host.h"
+#include "usbin.h"
 
 // ============== Defines ==============
 
 #define KEYBOARD_REPORT_LEN 6
-// WS2812 LED FOR RP2040 ZERO
-#define LED_PIN 16
-// LED for Raspberry Pi Pico
-// #define LED_PIN 25
+
+// Status LED pin. Default target is the Waveshare RP2040-Zero (WS2812 on
+// GPIO16). Build with -DRP2040_ZERO=0 to target a Raspberry Pi Pico (LED on
+// GPIO25). The define is forwarded from CMake; default here keeps the
+// historical RP2040-Zero behaviour if it is ever compiled standalone.
+#ifndef RP2040_ZERO
+#define RP2040_ZERO 1
+#endif
+#if RP2040_ZERO
+#define LED_PIN 16   // Waveshare RP2040-Zero on-board WS2812 data pin
+#else
+#define LED_PIN 25   // Raspberry Pi Pico on-board LED
+#endif
+
 #define BUF_COUNT   4
+
+// Full-matrix resync cadence (microseconds). Self-heals any dropped event.
+#define RESYNC_INTERVAL_US 250000ull
 
 // ================= headers ===================
 
@@ -28,8 +43,10 @@ uint8_t buf_owner[BUF_COUNT] = { 0 };
 uint8_t isMounted = 0;
 uint8_t kb_leds = 0;
 uint8_t kb_modifiers = 0;
+// NKRO scratch sizing only (the event model uses its own internal state in
+// usbin.c). Kept so the NKRO expansion in tuh_hid_report_received_cb is
+// unchanged; kb_report_receive() caps the effective key count safely.
 uint8_t kb_keys[120] = {0};
-uint8_t SHIFT_UP = 0;
 
 // ============== Function to run on Core 1 ==============
 
@@ -52,7 +69,13 @@ bool toggle_led_callback(repeating_timer_t *timer) {
 // ============== Main ==============
 
 int main() {
+    // stdio is routed to USB-CDC only (PICO_STDIO_UART disabled in CMakeLists),
+    // so this never touches uart0. Any DEBUG printf goes over USB-CDC.
     stdio_init_all();
+
+    // Dedicated keyboard link on uart0 (GPIO0 = TX -> FPGA pin 75). Must run
+    // AFTER stdio_init_all() so our explicit pin mux owns GPIO0/uart0.
+    kb_uart_init();
 
     tusb_init();
 
@@ -76,8 +99,19 @@ int main() {
 
     tuh_hid_set_default_protocol(HID_PROTOCOL_REPORT);
 
+    uint64_t next_resync = time_us_64() + RESYNC_INTERVAL_US;
+
     while (1) {
-        tuh_task();
+        tuh_task();      // service USB host (fills the TX ring via callbacks)
+        kb_tx_pump();    // drain TX ring into uart0 FIFO -- never blocks
+
+        // Periodic full-matrix resync (also self-heals any dropped byte).
+        uint64_t now = time_us_64();
+        if ((int64_t)(now - next_resync) >= 0) {
+            kb_send_resync();
+            kb_tx_pump();
+            next_resync = now + RESYNC_INTERVAL_US;
+        }
     }
 
     return 0;

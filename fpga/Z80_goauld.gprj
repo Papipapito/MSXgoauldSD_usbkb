@@ -47,6 +47,7 @@
         <File path="src/gowin/clk_108p.v" type="file.verilog" enable="1"/>
         <File path="src/gowin_clkdiv/gowin_clkdiv.v" type="file.verilog" enable="1"/>
         <File path="src/impulse.v" type="file.verilog" enable="1"/>
+        <File path="src/kbd_uart_rx.v" type="file.verilog" enable="1"/>
         <File path="src/megaram.v" type="file.verilog" enable="1"/>
         <File path="src/memory.v" type="file.verilog" enable="1"/>
         <File path="src/msx2p_debug.v" type="file.verilog" enable="1"/>

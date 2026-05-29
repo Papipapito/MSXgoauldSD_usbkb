@@ -4,7 +4,6 @@
 #include "bsp/board_api.h"
 #include <stdint.h>
 #include "keymaps.h"
-#include "charset.h"
 
 typedef int8_t s8;
 typedef int16_t s16;
@@ -74,6 +73,12 @@ u8 hid_parse_report_descriptor(hid_report_info_t* report_info_arr, u8 arr_count,
 u8 hid_parse_keyboard_modifiers(hid_report_info_t* report_info_arr, const u8 *report, u8 len);
 bool hid_parse_keyboard_is_nkro(hid_report_info_t* report_info_arr);
 void kb_report_receive(u8 modifiers, u8 const* report, u16 len);
+
+// MSX Goa'uld keyboard UART link (uart0 @ 115200 8N1, GPIO0 = TX).
+void kb_uart_init(void);     // configure uart0 + GPIO0 for the keyboard link
+void kb_tx_pump(void);       // drain the TX ring into the UART FIFO (non-blocking)
+void kb_send_resync(void);   // push a full-matrix resync frame (0xFE..0xFF)
+
 void tuh_kb_set_leds(u8 leds);
 void tuh_hid_mount_cb(u8 dev_addr, u8 instance, u8 const* desc_report, u16 desc_len);
 void tuh_hid_umount_cb(u8 dev_addr, u8 instance);

@@ -66,6 +66,9 @@ module top
     //usb uart
     output wire usb_uart_tx,
 
+    // USB-keyboard virtual matrix UART RX (from RP2040 Pico GPIO0 TX -> pin 75)
+    input wire kbd_uart_rx_pin,
+
     // Magic ports for SDRAM to be inferred
     output wire O_sdram_clk,
     output wire O_sdram_cke,
@@ -476,7 +479,12 @@ end
                      ( ppi_req_r == 1 ) ? ppi_port_a :
                      ( slot0_req_r == 1 ) ? 8'hff :
                      ( slotx_req_r == 1 ) ? 8'hff :
-                      bus_data;
+                     // USB-keyboard merge: on an I/O 0xA9 keyboard-column read,
+                     // AND the physical PPI read (bus_data) with the virtual
+                     // matrix row. Both are active-low, so a key pressed on
+                     // EITHER keyboard pulls its bit to 0. All other reads fall
+                     // through to bus_data unchanged.
+                     ( kbd_a9_req_r ) ? (bus_data & vkey_row) : bus_data;
     end
 
 
@@ -698,6 +706,25 @@ end
         end
     end
 
+    //----------------------------------------------------------------
+    //-- USB keyboard (virtual matrix fed by UART from RP2040)
+    //--   PPI port C (I/O 0xAA) write selects the keyboard column; we
+    //--   latch its low nibble (bits 3:0) as the active matrix column.
+    //--   PPI port B (I/O 0xA9) read returns the column's row state; we
+    //--   merge the FPGA virtual matrix row with the physical read in the
+    //--   cpu_din mux above via active-low AND, so both keyboards work.
+    //--   This logic only OBSERVES the bus and supplies vkey_row; it never
+    //--   drives the data bus on reads.
+    //----------------------------------------------------------------
+    wire ppi_c_req_w = (bus_addr[7:0] == 8'haa && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0);
+    reg [3:0] vkey_col;
+    always @(posedge clk_54m or negedge bus_reset_n)
+        if (!bus_reset_n) vkey_col <= 4'd0;
+        else if (ppi_c_req_w) vkey_col <= cpu_dout[3:0];
+
+    wire kbd_a9_req_r = (bus_addr[7:0] == 8'ha9 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
+    wire [7:0] vkey_row;
+
     //expanded slots 0 & 3
     reg [7:0] exp_slot0;
     wire [1:0] exp_slot0_page;
@@ -867,7 +894,26 @@ end
         .db_o       (uart_dout)
     );
 
-`endif 
+`endif
+
+    //----------------------------------------------------------------
+    //-- USB keyboard virtual-matrix UART receiver (RP2040 -> pin 75)
+    //--   Runs entirely in clk_54m (same domain as the cpu_din mux and the
+    //--   vkey_col latch), so there is no multi-bit CDC; only the raw RX pin
+    //--   is async and is 2-flop synchronized inside the module. Drives
+    //--   vkey_row, which is merged with the physical keyboard read in the
+    //--   cpu_din mux. v1: cmd_* pulse outputs are left open (Gowin trims).
+    //----------------------------------------------------------------
+    kbd_uart_rx #(.CLK_FREQ(54_000_000), .BAUD(115200)) ukbd (
+        .clk                 (clk_54m),
+        .reset_n             (bus_reset_n),
+        .rx                  (kbd_uart_rx_pin),
+        .vkey_col            (vkey_col),
+        .vkey_row_out        (vkey_row),
+        .cmd_scanline_toggle (),
+        .cmd_reset_pulse     (),
+        .cmd_osd_toggle      ()
+    );
 
     //rtc
     wire rtc_req_r;

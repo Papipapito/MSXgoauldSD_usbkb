@@ -26,6 +26,109 @@
  *
  */
 #include "usbin.h"
+#include "hardware/uart.h"
+#include "hardware/gpio.h"
+#include <string.h>
+
+// ---------------------------------------------------------------------------
+// MSX Goa'uld keyboard link -- event-driven make/break model.
+//
+// We mirror the USB key state onto the FPGA matrix as MAKE/BREAK events and
+// resync the full shadow matrix periodically. The FPGA owns the matrix and
+// the MSX BIOS does autorepeat, so we never block and never auto-release.
+//
+// Wire protocol (FROZEN -- must match the FPGA RX side exactly):
+//   UART0 @ 115200 8N1, GPIO0 = TX -> FPGA pin 75 (RX).
+//   cell byte         = 0x80 | (bit<<4) | row     row 0..10, bit 0..7
+//   0x90 <cell>       = MAKE
+//   0xA0 <cell>       = BREAK
+//   commands (bit7=0) = 0x01 scanline, 0x02 reset, 0x03 OSD (sent raw)
+//   full resync       = 0xFE, vmatrix[0..10] (active-low), 0xFF
+// ---------------------------------------------------------------------------
+
+#define KB_UART        uart0
+#define OP_MAKE        0x90
+#define OP_BREAK       0xA0
+#define RESYNC_START   0xFE
+#define RESYNC_END     0xFF
+
+// Derived-modifier bit positions (logical, OR of L/R HID bits).
+#define DRV_SHIFT      0x01
+#define DRV_CTRL       0x02
+#define DRV_GRAPH      0x04
+#define DRV_CODE       0x08
+
+// Matrix cells for the four MSX modifiers, all on row 6.
+// SHIFT=row6 bit0 (0x86), CTRL=row6 bit1 (0x96), GRAPH=row6 bit2 (0xA6),
+// CODE=row6 bit4 (0xC6).
+#define MOD_CELL_SHIFT 0x86
+#define MOD_CELL_CTRL  0x96
+#define MOD_CELL_GRAPH 0xA6
+#define MOD_CELL_CODE  0xC6
+
+// Active-low shadow of the 11 matrix rows. bit=1 -> released, bit=0 -> pressed.
+static uint8_t vmatrix[11];
+// Previous non-modifier key set (HID usage codes), as last seen in a report.
+static uint8_t prev_keys[16];
+// Previous derived (logical) modifier state: {SHIFT,CTRL,GRAPH,CODE}.
+static uint8_t prev_derived = 0;
+
+// Non-blocking TX ring buffer (drained in main() by kb_tx_pump()).
+static volatile uint8_t txbuf[256];
+static volatile uint8_t tx_head = 0;
+static volatile uint8_t tx_tail = 0;
+
+static inline void tx_push(uint8_t b) {
+    uint8_t next = (uint8_t)(tx_head + 1);
+    if(next == tx_tail) {
+        // Ring full: drop the oldest byte to keep the stream moving. A dropped
+        // event self-heals on the next 250 ms full-matrix resync.
+        tx_tail++;
+    }
+    txbuf[tx_head] = b;
+    tx_head = next;
+}
+
+// Drain the TX ring into the UART FIFO without blocking. Called from main loop.
+void kb_tx_pump(void) {
+    while(tx_tail != tx_head && uart_is_writable(KB_UART)) {
+        uart_get_hw(KB_UART)->dr = txbuf[tx_tail++];
+    }
+}
+
+// Emit a MAKE/BREAK event for a matrix cell and update the shadow matrix.
+static void emit_event(uint8_t op, uint8_t cell) {
+    uint8_t row = cell & 0x0F;
+    uint8_t bit = (cell >> 4) & 0x07;
+    if(row <= 10) {
+        if(op == OP_MAKE) vmatrix[row] &= (uint8_t)~(1u << bit); // pressed -> 0
+        else              vmatrix[row] |=  (uint8_t)(1u << bit);  // released -> 1
+    }
+    tx_push(op);
+    tx_push(cell);
+}
+
+// Emit a raw command opcode (bit7==0). FPGA ignores in v1, harmless.
+static void emit_command(uint8_t cmd) {
+    tx_push(cmd);
+}
+
+// Push a full-matrix resync frame onto the TX ring.
+void kb_send_resync(void) {
+    tx_push(RESYNC_START);
+    for(uint8_t r = 0; r < 11; r++) tx_push(vmatrix[r]);
+    tx_push(RESYNC_END);
+}
+
+// Initialize the dedicated keyboard UART link: uart0 @ 115200 8N1, GPIO0=TX.
+// This is the ONLY owner of uart0 -- stdio must not be routed here (see main.c).
+void kb_uart_init(void) {
+    memset(vmatrix, 0xFF, sizeof(vmatrix)); // all keys released at boot
+    uart_init(KB_UART, 115200);
+    uart_set_format(KB_UART, 8, 1, UART_PARITY_NONE); // 8N1 (explicit)
+    uart_set_fifo_enabled(KB_UART, true);
+    gpio_set_function(0, GPIO_FUNC_UART); // GPIO0 = uart0 TX -> FPGA pin 75 (RX)
+}
 
 typedef struct {
   const hid_report_item_t *x;
@@ -49,11 +152,6 @@ struct {
   u8 dev_addr;
   u8 instance;
 } keyboards[8];
-
-extern uint8_t SHIFT_UP;
-extern void printChar(uint8_t character, uint8_t col, uint8_t row );
-extern void clearScreen();
-extern void printHome();
 
 bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, u8 type, u16 page, u8 bit, const hid_report_item_t **item) {
   for(u8 i = 0; i < report_info_arr->num_items; i++) {
@@ -300,75 +398,75 @@ bool hid_parse_keyboard_is_nkro(hid_report_info_t* report_info_arr) {
 	return false;
 }
 
+// Pack the raw HID modifier byte into the 4 logical MSX modifiers, ORing the
+// left/right HID bits so that releasing one Shift while the other is still
+// held does NOT drop the MSX SHIFT.
+//   HID bits: 0 LCtrl,1 LShift,2 LAlt,3 LGUI,4 RCtrl,5 RShift,6 RAlt,7 RGUI
+//   SHIFT = bits 1|5 (0x22)   CTRL = bits 0|4 (0x11)
+//   GRAPH = bit  2   (0x04)   CODE = bit  6   (0x40)
+static inline uint8_t derive_modifiers(uint8_t mods) {
+    uint8_t d = 0;
+    if(mods & 0x22) d |= DRV_SHIFT;
+    if(mods & 0x11) d |= DRV_CTRL;
+    if(mods & 0x04) d |= DRV_GRAPH;
+    if(mods & 0x40) d |= DRV_CODE;
+    return d;
+}
+
+// Event-driven make/break translation. Called on every HID keyboard report.
+// `report` is exactly 6 bytes of HID usage codes (0 = empty slot) for boot and
+// 6KRO reports; NKRO is expanded to the same flat form by the dispatcher.
 void kb_report_receive(uint8_t modifiers, uint8_t const* report, u16 len) {
-	// Report format for HID keyboard:
-    // [0] Modifier keys (bitfield)
-    // [1] Reserved
-    // [2-7] Key codes (max 6 keys pressed simultaneously)
-	if(modifiers != kb_modifiers) {
-		// modifiers have changed
-		uint8_t rbits = modifiers;
-		uint8_t pbits = kb_modifiers;
+	if(len > sizeof(prev_keys)) len = sizeof(prev_keys);
 
-		for(uint8_t j = 0; j < 8; j++) {
-			rbits = rbits >> 1;
-			pbits = pbits >> 1;
+	// ---- 1. Modifiers: diff the 4 DERIVED logical bits, not raw HID bits ----
+	uint8_t derived = derive_modifiers(modifiers);
+	if(derived != prev_derived) {
+		uint8_t changed = derived ^ prev_derived;
+		if(changed & DRV_SHIFT)
+			emit_event((derived & DRV_SHIFT) ? OP_MAKE : OP_BREAK, MOD_CELL_SHIFT);
+		if(changed & DRV_CTRL)
+			emit_event((derived & DRV_CTRL)  ? OP_MAKE : OP_BREAK, MOD_CELL_CTRL);
+		if(changed & DRV_GRAPH)
+			emit_event((derived & DRV_GRAPH) ? OP_MAKE : OP_BREAK, MOD_CELL_GRAPH);
+		if(changed & DRV_CODE)
+			emit_event((derived & DRV_CODE)  ? OP_MAKE : OP_BREAK, MOD_CELL_CODE);
+		prev_derived = derived;
+	}
+	kb_modifiers = modifiers;
+
+	// ---- 2. BREAKs: keys present in prev_keys but absent from report ----
+	for(uint8_t i = 0; i < sizeof(prev_keys); i++) {
+		uint8_t k = prev_keys[i];
+		if(k == 0) continue;
+		bool still_down = false;
+		for(uint8_t j = 0; j < len; j++) {
+			if(report[j] == k) { still_down = true; break; }
 		}
-		kb_modifiers = modifiers;
+		if(!still_down) {
+			uint8_t cell = keycode_to_goauld[k];
+			if(cell & 0x80) emit_event(OP_BREAK, cell); // commands have no break
+		}
 	}
 
-	// go over activated non-modifier keys in prev_rpt and
-	// check if they are still in the current report
+	// ---- 3. MAKEs: keys present in report but absent from prev_keys ----
 	for(uint8_t i = 0; i < len; i++) {
-		if(kb_keys[i]) {
-			bool brk = true;
-			for(uint8_t j = 0; j < len; j++) {
-				if(kb_keys[i] == report[j]) {
-					brk = false;
-					break;
-				}
-			}
+		uint8_t k = report[i];
+		if(k == 0) continue;
+		bool was_down = false;
+		for(uint8_t j = 0; j < sizeof(prev_keys); j++) {
+			if(prev_keys[j] == k) { was_down = true; break; }
+		}
+		if(!was_down) {
+			uint8_t cell = keycode_to_goauld[k];
+			if(cell & 0x80) emit_event(OP_MAKE, cell);   // matrix key
+			else if(cell)   emit_command(cell);          // command opcode (F6..F12)
 		}
 	}
 
-	// go over activated non-modifier keys in report and check if they were
-	// already in prev_rpt.
-	for(uint8_t i = 0; i < len; i++) {
-		if(report[i]) {
-			bool make = true;
-			for(uint8_t j = 0; j < len; j++) {
-				if(report[i] == kb_keys[j]) {
-					make = false;
-					break;
-				}
-			}
-			// send make if key was in the current report the first time
-			if(make) {
-				uint8_t keycode = report[i];
-				     if (keycode == 0x45) putchar(0x00); // F12 button - OSD
-				else if (keycode == 0x44) putchar(0x04); // F11 button - SCANLINES
-				else if (keycode == 0x43) printHome();   // F10 button - print HOME
-				else if (keycode == 0x42) clearScreen(); // F9  button - clear OSD
-				else if (keycode < 128) {
-                    // bool shift = (modifiers & 0x22) != 0; // Left or Right Shift
-    			    // ((modifiers & 0x22) != 0) ? putchar(0x05) : putchar(0x01); // Left or Right Shift
-                    // if (shift) putchar(0x05);
-    				// sleep_ms(1);
-                    putchar(0x01);
-					sleep_ms(5);
-                    uint8_t byte_to_send = keycode_to_goauld[keycode];
-					putchar(byte_to_send);
-					sleep_ms(40);
-					putchar(0x01);
-					sleep_ms(5);
-					putchar((uint8_t)143);
-				}
-			}
-		}
-	}
-
-	memset(kb_keys, 0, sizeof(kb_keys));
-	memcpy(kb_keys, report, len);
+	// ---- 4. Snapshot the new key set ----
+	memset(prev_keys, 0, sizeof(prev_keys));
+	memcpy(prev_keys, report, len);
 }
 
 void tuh_kb_set_leds(uint8_t leds) {
@@ -406,6 +504,11 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 					break;
 				}
 			}
+			// Establish a clean baseline on the FPGA: nothing pressed yet.
+			memset(vmatrix, 0xFF, sizeof(vmatrix));
+			memset(prev_keys, 0, sizeof(prev_keys));
+			prev_derived = 0;
+			kb_send_resync();
 		}
 		board_led_write(1);
 	}
@@ -420,6 +523,11 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
 			break;
 		}
 	}
+	// Keyboard gone: release everything on the FPGA so no key stays stuck.
+	memset(vmatrix, 0xFF, sizeof(vmatrix));
+	memset(prev_keys, 0, sizeof(prev_keys));
+	prev_derived = 0;
+	kb_send_resync();
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, u16 len) {
