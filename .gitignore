@@ -1,0 +1,15 @@
+# RP2040 firmware build directory (CMake/Ninja output)
+rp2040/build/
+
+# Headless Gowin build helper + logs (the IDE build uses Z80_goauld.gprj)
+fpga/build_kbd.tcl
+
+# Gowin headless build outputs (project.* — IDE outputs are Z80_goauld.*)
+fpga/impl/pnr/project.*
+fpga/impl/pnr/project_*
+fpga/impl/gwsynthesis/project.*
+fpga/impl/gwsynthesis/project_*
+
+# Build logs
+*_log.txt
+*.log
