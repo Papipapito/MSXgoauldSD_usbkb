@@ -1,3 +1,15 @@
+# MSXgoauldSD_usbkb — MSX Goa'uld con teclado USB
+
+> Fork de **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD_tn20k)** que añade **teclado USB** (funciona en paralelo al teclado físico del MSX) mediante un **Raspberry Pi Pico / RP2040** conectado por UART.
+>
+> **Trabajo derivado del gran trabajo de:**
+> - **jabadiagm** — MSX Goa'uld: motor MSX2+ en FPGA, placa y core. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
+> - **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: firmware RP2040 host USB. <https://github.com/Chandler-Kluser/msx-goauld-ga> (a su vez basado en el parser HID de No0ne / pdaxrom).
+>
+> **Añade:** matriz de teclado USB virtual fusionada en el FPGA (sin tocar BIOS, slots, joysticks ni cartuchos), firmware RP2040 reescrito (make/break no bloqueante, modificadores, LED de estado WS2812) y layout **US⇄Español conmutable en caliente**. Código en [`rp2040/`](rp2040/) y [`fpga/`](fpga/); binarios en [Releases](../../releases). Licencia **GPLv3** (heredada).
+
+---
+
 # MSXgoauldSD_tn20k
 MSX Goa'uld board with Tang Nano 20k and SD support
 
