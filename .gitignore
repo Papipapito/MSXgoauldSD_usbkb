@@ -13,3 +13,8 @@ fpga/impl/gwsynthesis/project_*
 # Build logs
 *_log.txt
 *.log
+
+# production/: the .uf2 and .fs ARE committed; never the copyrighted MSX BIOS
+# pack or the debug ELF.
+production/goauld_rom_int.bin
+production/*.elf

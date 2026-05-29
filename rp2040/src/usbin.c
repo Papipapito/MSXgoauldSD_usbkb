@@ -89,12 +89,6 @@ static uint8_t prev_keys[16];
 static uint8_t prev_derived = 0;
 volatile uint64_t g_last_key_us = 0;  // updated on each MAKE; read by the status LED in main.c
 
-// Runtime keyboard layout: 0 = US/International (default), 1 = Spanish.
-// Tap LAYOUT_TOGGLE_HID to flip; the status LED flashes cyan(US)/magenta(ES) to confirm.
-#define LAYOUT_TOGGLE_HID 0x46   // PrintScreen (unused on MSX). Change if your keyboard lacks it.
-volatile uint8_t  g_layout = 0;
-volatile uint64_t g_layout_changed_us = 0;
-
 // Non-blocking TX ring buffer (drained in main() by kb_tx_pump()).
 static volatile uint8_t txbuf[256];
 static volatile uint8_t tx_head = 0;
@@ -213,16 +207,6 @@ struct {
 
 // Status-LED aid: nonzero while at least one USB gamepad is registered.
 volatile uint8_t g_joy_mounted = 0;
-// time_us_64() of the last HID device skipped because its report descriptor
-// exceeded CFG_TUH_ENUMERATION_BUFSIZE; drives a violet status-LED flash.
-volatile uint64_t g_hid_skip_us = 0;
-
-// Class-agnostic USB attach/detach (fires for ANY enumerated device, even before
-// HID). Lets the status LED tell "a device enumerated but no HID driver claimed
-// it" (blue) apart from "nothing enumerated at all -> power/signal" (red).
-volatile uint8_t g_usb_dev_count = 0;
-void tuh_mount_cb(uint8_t daddr)  { (void)daddr; if(g_usb_dev_count < 255) g_usb_dev_count++; }
-void tuh_umount_cb(uint8_t daddr) { (void)daddr; if(g_usb_dev_count) g_usb_dev_count--; }
 
 // True if a parsed top-level collection is a generic-desktop gamepad/joystick.
 static inline bool is_gamepad_usage(const hid_report_info_t *info) {
@@ -504,22 +488,8 @@ static inline uint8_t derive_modifiers(uint8_t mods) {
 }
 
 // Map a USB HID usage code to an MSX matrix cell.
-// Default build = US/International (keycode_to_goauld, matches the int'l BIOS).
-// Build with -DKEYMAP_ES=1 to override the few keys a physical SPANISH keyboard
-// places differently, so they land on the right int'l MSX cells. Accents (a e i
-// o u with acute) work via the MSX DEAD key. NOTE: n-tilde, inverted ?/! and the
-// Spanish SHIFTED pairs are decided by the MSX BIOS (international here); a pure
-// RP2040 remap cannot create characters the int'l BIOS lacks -> for full Spanish
-// use a Spanish BIOS in the ROM pack.
+// US / International layout (keycode_to_goauld), matching the international BIOS.
 static inline uint8_t map_cell(uint8_t k) {
-    if (g_layout == 1) {            // Spanish layout (runtime toggle), over the int'l BIOS
-        switch (k) {
-            case 0x34: return 0xD2; // Spanish dead-acute/diaeresis key (US ') -> MSX DEAD
-            case 0x2D: return 0x82; // Spanish ' key (US -) -> MSX '
-            case 0x38: return 0xA1; // Spanish - key (US /) -> MSX -
-            default:   break;
-        }
-    }
     return keycode_to_goauld[k];
 }
 
@@ -544,17 +514,6 @@ void kb_report_receive(uint8_t modifiers, uint8_t const* report, u16 len) {
 		prev_derived = derived;
 	}
 	kb_modifiers = modifiers;
-
-	// ---- Layout toggle: a fresh press of LAYOUT_TOGGLE_HID flips US<->ES locally.
-	//      The key itself is unmapped (map_cell -> 0) so it is never sent to the MSX.
-	for(uint8_t i = 0; i < len; i++) {
-		if(report[i] == LAYOUT_TOGGLE_HID) {
-			bool was = false;
-			for(uint8_t j = 0; j < sizeof(prev_keys); j++)
-				if(prev_keys[j] == LAYOUT_TOGGLE_HID) { was = true; break; }
-			if(!was) { g_layout ^= 1; g_layout_changed_us = time_us_64(); }
-		}
-	}
 
 	// ---- 2. BREAKs: keys present in prev_keys but absent from report ----
 	for(uint8_t i = 0; i < sizeof(prev_keys); i++) {
@@ -744,8 +703,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 	// This happens if report descriptor length > CFG_TUH_ENUMERATION_BUFSIZE.
 	// Consider increasing #define CFG_TUH_ENUMERATION_BUFSIZE 256 in tusb_config.h
 	if(desc_report == NULL && desc_len == 0) {
-		g_hid_skip_us = time_us_64();   // descriptor too big for the enum buffer -> LED violet
-		// printf("WARNING: HID(%d,%d) skipped!\n", dev_addr, instance);
+		// Report descriptor didn't fit CFG_TUH_ENUMERATION_BUFSIZE (now 2048); skip it.
 		return;
 	}
 

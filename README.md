@@ -1,13 +1,72 @@
-# MSXgoauldSD_usbkb — MSX Goa'uld with USB keyboard
+# MSXgoauldSD_usbkb — MSX Goa'uld with USB keyboard & joystick
 
-> Fork of **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD_tn20k)** that adds a **USB keyboard** (working alongside the MSX's physical keyboard) via a **Raspberry Pi Pico / RP2040** over UART.
->
-> **Derived from the great work of:**
-> - **jabadiagm** — MSX Goa'uld: the FPGA MSX2+ engine, board and core. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
-> - **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: the RP2040 USB-host firmware. <https://github.com/Chandler-Kluser/msx-goauld-ga> (itself based on the No0ne / pdaxrom HID parser).
-> - **Ryan Wendland (Ryzee119)** — `tusb_xinput`, the TinyUSB XInput host driver used for Xbox-style pads (MIT). <https://github.com/Ryzee119/tusb_xinput>
->
-> **What this fork adds:** a virtual **USB keyboard** matrix **and a USB joystick (generic HID + XInput/Xbox)** merged inside the FPGA (the real keyboard, joysticks, slots and cartridges all keep working), a rewritten RP2040 firmware (non-blocking make/break, modifiers, WS2812 status LED), a hot-swappable **US⇄Spanish** layout, and optional WiFi via an ESP-01S. Code in [`rp2040/`](rp2040/) and [`fpga/`](fpga/); binaries in [Releases](../../releases). **GPLv3** (inherited).
+Fork of **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD_tn20k)** — the FPGA "Z80-socket replacement" that turns a real MSX into an MSX2+ on a Tang Nano 20K — adding a **USB keyboard and a USB joystick/gamepad** that work **alongside** the MSX's own keyboard and joysticks, through a **Raspberry Pi Pico / RP2040** over a single UART wire. Everything the MSX already does (real keyboard, joysticks, cartridges, SD, WiFi) keeps working; the USB devices are *merged in*, not a replacement.
+
+**Derived from the great work of:**
+- **jabadiagm** — MSX Goa'uld: the FPGA MSX2+ core and board. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
+- **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: the RP2040 USB-host firmware (based on the No0ne / pdaxrom HID parser). <https://github.com/Chandler-Kluser/msx-goauld-ga>
+- **Ryan Wendland (Ryzee119)** — `tusb_xinput`, the TinyUSB XInput host driver (MIT). <https://github.com/Ryzee119/tusb_xinput>
+
+**License:** GPLv3 (inherited). The vendored `tusb_xinput` driver keeps its MIT header.
+
+## Features
+- **USB keyboard** alongside the physical MSX keyboard — **US / International** layout, non-blocking make/break, modifiers (Shift/Ctrl/Graph/Code).
+- **USB joystick / gamepad** merged with the real MSX joysticks — **generic HID *and* XInput (Xbox)** pads.
+- **One data wire**: RP2040 → FPGA over UART (Tang Nano pin 75). The joystick needs no extra pins (same link).
+- **WS2812 status LED** on the RP2040 (red / green / yellow / white).
+- **WiFi (ESP-01S)** ready in the FPGA core (optional).
+- Real keyboard, joysticks, slots and cartridges are untouched.
+
+## How it works
+The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bus. It does **not** re-implement the keyboard/joystick ports — the real motherboard scans them and the FPGA just *watches* the bus. The RP2040 runs a TinyUSB **host**, reads the USB keyboard + gamepad, and sends keyboard **make/break** events (plus a periodic full-matrix resync) and a **joystick byte** (`0xB0 <port> <state>`) over UART. Inside the FPGA these are **AND-merged** (active-low) into the MSX keyboard-matrix read and the PSG joystick read, so the **USB and the real devices coexist** — use either, both reach the MSX.
+
+## Binaries (see [Releases](../../releases) or [`production/`](production/))
+| File | What it is |
+|---|---|
+| `MSXgoauldSD_usbkb.fs` | FPGA bitstream (Tang Nano 20K, GW2AR-18) with the keyboard + joystick merge. |
+| `rp2040_keyboard.uf2` | RP2040 firmware (Waveshare RP2040-Zero, WS2812 LED on GPIO16). |
+
+> The `.uf2` targets the **RP2040-Zero**. For a plain Raspberry Pi Pico, rebuild with `-DRP2040_ZERO=0` (mono LED on GPIO25).
+
+## Status LED (WS2812)
+| Colour | Meaning |
+|---|---|
+| 🔵 Blue blink (3×) at power-up | Firmware booted OK |
+| 🔴 Solid red | Alive — nothing connected |
+| 🟢 Solid green | USB **keyboard** connected |
+| 🟡 Solid yellow | USB **gamepad** connected |
+| ⚪ White flash | Key press / joystick activity |
+
+## Flashing (both files)
+1. **FPGA** — Gowin Programmer → load `MSXgoauldSD_usbkb.fs` into the Tang Nano 20K (SRAM for a quick test, or the external config flash to persist). Your BIOS pack at `0x200000` is untouched.
+2. **RP2040** — hold **BOOTSEL**, plug USB-C → the `RPI-RP2` drive appears → copy `rp2040_keyboard.uf2` onto it. The blue boot blink = it's running.
+
+## USB keyboard
+**US / International** layout (matches the international MSX2+ BIOS). Letters, digits and arrows are 1:1 with the MSXnano translator; a few symbols depend on your board's BIOS. The MSX BIOS does autorepeat and the FPGA owns the matrix, so the RP2040 never blocks.
+
+## USB joystick / gamepad
+Plug a **wired** USB pad into the RP2040 (use a USB hub if you also want the keyboard at the same time). Mapped to **MSX joystick port 1**: D-pad / hat / left stick → directions, **A / button 1 → fire 1 (trigger A)**, **B / button 2 → fire 2 (trigger B)**.
+- **XInput** — Xbox 360 / One / Series and XInput-mode pads (via the bundled `tusb_xinput` driver). ✅ tested on hardware.
+- **Generic HID** — pads exposing standard X/Y axes, a hat and buttons (many retro / arcade / SNES-style USB pads).
+- **Limitations:** wireless **2.4 GHz dongles** usually can't be enumerated by the RP2040's lightweight USB host (they signal late, after the pad pairs) → use a **wired** controller; some **DualShock 4 / PS-mode** pads use a report format the basic HID parser doesn't decode yet → use the pad in **XInput mode** if it has one.
+
+## Wiring (one data wire + ground + 5 V)
+```
+RP2040 GPIO0 (UART0 TX)  ->  Tang Nano 20K pin 75
+RP2040 GND               ->  Tang Nano 20K GND   (common ground, required)
+RP2040 VBUS / 5V         ->  MSX +5V
+USB keyboard / gamepad   ->  RP2040 USB host port (use a hub for both at once)
+```
+UART **115200 8N1**, data flows RP2040 → FPGA only; 3.3 V LVCMOS both ends (no level shifter).
+
+### WiFi (ESP-01S, optional)
+The core ships with the MSX UNAPI WiFi driver. Wire an **ESP-01S**: TX → **pin 77**, RX → **pin 79**, VCC + CH_PD → **3.3 V**, GND → GND. Firmware: the **OCM** build of **[ducasp / MSX-Development ESPFW1.4](https://github.com/ducasp/MSX-Development/releases/tag/ESPFW1.4)**; baud **859372**, I/O ports **0x06 / 0x07**. It coexists with the RP2040 (pin 75).
+
+## Building from source
+- **FPGA:** open `Z80_goauld.gprj` in Gowin EDA, run synthesis + place-and-route → `MSXgoauldSD_usbkb.fs`. The USB logic is in [`fpga/src/kbd_uart_rx.v`](fpga/src/kbd_uart_rx.v) and the bus merge in [`fpga/top.v`](fpga/top.v).
+- **RP2040:** standard pico-sdk build in [`rp2040/`](rp2040/) — `cmake -B build && cmake --build build`. Set `PICO_SDK_PATH` to your pico-sdk; pass `-DRP2040_ZERO=0` for a plain Pico.
+
+The MSX **BIOS pack** and any third-party module firmware are **not** distributed here (copyright).
 
 ---
 
