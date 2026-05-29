@@ -153,6 +153,7 @@ static uint8_t joy_state[2] = {0, 0};   // active-high shadow, indexed by port
 static void joy_set_state(uint8_t port, uint8_t b) {
     if(port > 1 || b == joy_state[port]) return;
     joy_state[port] = b;
+    g_last_key_us = time_us_64();   // flash the status LED on joystick activity (detection aid)
     tx_push(OP_JOY);
     tx_push(port);
     tx_push(b);
@@ -208,6 +209,9 @@ struct {
   u8 dev_addr;
   u8 instance;
 } gamepads[8];
+
+// Status-LED aid: nonzero while at least one USB gamepad is registered.
+volatile uint8_t g_joy_mounted = 0;
 
 // True if a parsed top-level collection is a generic-desktop gamepad/joystick.
 static inline bool is_gamepad_usage(const hid_report_info_t *info) {
@@ -718,6 +722,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 					}
 				}
 				joy_set_state(0, 0); // clean baseline: no direction/fire held
+					g_joy_mounted = 1;   // status LED: a USB gamepad is connected
 			}
 		}
 		isMounted = 1; board_led_write(1);
@@ -747,6 +752,7 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
 			gamepads[i].dev_addr = 0;
 			gamepads[i].instance = 0;
 			joy_set_state(0, 0);
+			g_joy_mounted = 0;
 			break;
 		}
 	}

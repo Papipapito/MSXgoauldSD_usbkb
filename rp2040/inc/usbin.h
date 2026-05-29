@@ -64,6 +64,7 @@ extern uint8_t isMounted;
 extern volatile uint64_t g_last_key_us;  // time_us_64() of the last MAKE; for the status LED
 extern volatile uint8_t  g_layout;             // 0=US/international, 1=Spanish (runtime toggle)
 extern volatile uint64_t g_layout_changed_us;  // time_us_64() of last layout switch; for LED flash
+extern volatile uint8_t  g_joy_mounted;        // nonzero while a USB gamepad is connected (status LED)
 extern tusb_desc_device_t desc_device;
 
 bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, u8 type, u16 page, u8 bit, const hid_report_item_t **item);

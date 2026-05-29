@@ -130,7 +130,8 @@ int main() {
         if      ((uint64_t)(now - g_layout_changed_us) < 600000ull) led = g_layout ? 0x180018u : 0x001818u; // layout switch flash: magenta=ES, cyan=US
         else if ((uint64_t)(now - g_last_key_us) < 70000ull) led = 0x202020u;  // white flash on keypress
         else if (isMounted)                                  led = 0x002000u;  // green: USB keyboard ready
-        else                                                 led = 0x1A0000u;  // red: no USB keyboard connected
+        else if (g_joy_mounted)                              led = 0x141400u;  // yellow: USB gamepad detected (no keyboard)
+        else                                                 led = 0x1A0000u;  // red: nothing connected
         if (led != led_prev) {
             status_led_rgb((uint8_t)(led >> 16), (uint8_t)(led >> 8), (uint8_t)led);
             led_prev = led;
