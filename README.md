@@ -1,12 +1,12 @@
-# MSXgoauldSD_usbkb — MSX Goa'uld con teclado USB
+# MSXgoauldSD_usbkb — MSX Goa'uld with USB keyboard
 
-> Fork de **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD_tn20k)** que añade **teclado USB** (funciona en paralelo al teclado físico del MSX) mediante un **Raspberry Pi Pico / RP2040** conectado por UART.
+> Fork of **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD_tn20k)** that adds a **USB keyboard** (working alongside the MSX's physical keyboard) via a **Raspberry Pi Pico / RP2040** over UART.
 >
-> **Trabajo derivado del gran trabajo de:**
-> - **jabadiagm** — MSX Goa'uld: motor MSX2+ en FPGA, placa y core. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
-> - **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: firmware RP2040 host USB. <https://github.com/Chandler-Kluser/msx-goauld-ga> (a su vez basado en el parser HID de No0ne / pdaxrom).
+> **Derived from the great work of:**
+> - **jabadiagm** — MSX Goa'uld: the FPGA MSX2+ engine, board and core. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
+> - **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: the RP2040 USB-host firmware. <https://github.com/Chandler-Kluser/msx-goauld-ga> (itself based on the No0ne / pdaxrom HID parser).
 >
-> **Añade:** matriz de teclado USB virtual fusionada en el FPGA (sin tocar BIOS, slots, joysticks ni cartuchos), firmware RP2040 reescrito (make/break no bloqueante, modificadores, LED de estado WS2812) y layout **US⇄Español conmutable en caliente**. Código en [`rp2040/`](rp2040/) y [`fpga/`](fpga/); binarios en [Releases](../../releases). Licencia **GPLv3** (heredada).
+> **What this fork adds:** a virtual USB-keyboard matrix merged inside the FPGA (without touching BIOS, slots, joysticks or cartridges), a rewritten RP2040 firmware (non-blocking make/break, modifiers, WS2812 status LED) and a hot-swappable **US⇄Spanish** layout. Code in [`rp2040/`](rp2040/) and [`fpga/`](fpga/); binaries in [Releases](../../releases). **GPLv3** (inherited).
 
 ---
 
