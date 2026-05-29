@@ -66,6 +66,7 @@ extern volatile uint8_t  g_layout;             // 0=US/international, 1=Spanish 
 extern volatile uint64_t g_layout_changed_us;  // time_us_64() of last layout switch; for LED flash
 extern volatile uint8_t  g_joy_mounted;        // nonzero while a USB gamepad is connected (status LED)
 extern volatile uint64_t g_hid_skip_us;        // last time a HID device was skipped (descriptor > enum buffer)
+extern volatile uint8_t  g_usb_dev_count;      // count of enumerated USB devices (any class); for the status LED
 extern tusb_desc_device_t desc_device;
 
 bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, u8 type, u16 page, u8 bit, const hid_report_item_t **item);

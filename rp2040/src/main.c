@@ -132,7 +132,8 @@ int main() {
         else if (g_hid_skip_us && (uint64_t)(now - g_hid_skip_us) < 1500000ull) led = 0x150028u;  // violet: a USB HID descriptor was too big (device skipped) -> raise CFG_TUH_ENUMERATION_BUFSIZE
         else if (isMounted)                                  led = 0x002000u;  // green: USB keyboard ready
         else if (g_joy_mounted)                              led = 0x141400u;  // yellow: USB gamepad detected (no keyboard)
-        else                                                 led = 0x1A0000u;  // red: nothing connected
+        else if (g_usb_dev_count)                            led = 0x000030u;  // blue: a USB device enumerated but no HID driver claimed it (XInput/vendor/unsupported)
+        else                                                 led = 0x1A0000u;  // red: nothing enumerated (power/signal?)
         if (led != led_prev) {
             status_led_rgb((uint8_t)(led >> 16), (uint8_t)(led >> 8), (uint8_t)led);
             led_prev = led;

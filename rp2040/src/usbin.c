@@ -216,6 +216,13 @@ volatile uint8_t g_joy_mounted = 0;
 // exceeded CFG_TUH_ENUMERATION_BUFSIZE; drives a violet status-LED flash.
 volatile uint64_t g_hid_skip_us = 0;
 
+// Class-agnostic USB attach/detach (fires for ANY enumerated device, even before
+// HID). Lets the status LED tell "a device enumerated but no HID driver claimed
+// it" (blue) apart from "nothing enumerated at all -> power/signal" (red).
+volatile uint8_t g_usb_dev_count = 0;
+void tuh_mount_cb(uint8_t daddr)  { (void)daddr; if(g_usb_dev_count < 255) g_usb_dev_count++; }
+void tuh_umount_cb(uint8_t daddr) { (void)daddr; if(g_usb_dev_count) g_usb_dev_count--; }
+
 // True if a parsed top-level collection is a generic-desktop gamepad/joystick.
 static inline bool is_gamepad_usage(const hid_report_info_t *info) {
   return info != NULL &&
