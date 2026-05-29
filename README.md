@@ -51,6 +51,19 @@ Plug a **wired** USB pad into the RP2040 (use a USB hub if you also want the key
 - **Limitations:** wireless **2.4 GHz dongles** usually can't be enumerated by the RP2040's lightweight USB host (they signal late, after the pad pairs) → use a **wired** controller; some **DualShock 4 / PS-mode** pads use a report format the basic HID parser doesn't decode yet → use the pad in **XInput mode** if it has one.
 
 ## Wiring (one data wire + ground + 5 V)
+
+![Tang Nano 20K pinout](pics/tang_nano_20k_pinout.png)
+
+*Tang Nano 20K pin labels — image © [Sipeed](https://wiki.sipeed.com/hardware/en/tang/tang-nano-20k/nano-20k.html).* **The pins this fork uses:**
+
+| Tang Nano 20K pin | Used for | Direction |
+|---|---|---|
+| 🟢 **75** | RP2040 keyboard **+ joystick** link | RP2040 GPIO0 (TX) → FPGA |
+| 🔵 **77** | WiFi — ESP-01S (optional) | ESP TX → FPGA |
+| 🔵 **79** | WiFi — ESP-01S (optional) | FPGA → ESP RX |
+| ⚫ **GND** | Common ground (required) | — |
+| 🔴 **5V** | Power | MSX +5 V → RP2040 / ESP |
+
 ```
 RP2040 GPIO0 (UART0 TX)  ->  Tang Nano 20K pin 75
 RP2040 GND               ->  Tang Nano 20K GND   (common ground, required)
