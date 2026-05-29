@@ -416,6 +416,26 @@ static inline uint8_t derive_modifiers(uint8_t mods) {
     return d;
 }
 
+// Map a USB HID usage code to an MSX matrix cell.
+// Default build = US/International (keycode_to_goauld, matches the int'l BIOS).
+// Build with -DKEYMAP_ES=1 to override the few keys a physical SPANISH keyboard
+// places differently, so they land on the right int'l MSX cells. Accents (a e i
+// o u with acute) work via the MSX DEAD key. NOTE: n-tilde, inverted ?/! and the
+// Spanish SHIFTED pairs are decided by the MSX BIOS (international here); a pure
+// RP2040 remap cannot create characters the int'l BIOS lacks -> for full Spanish
+// use a Spanish BIOS in the ROM pack.
+static inline uint8_t map_cell(uint8_t k) {
+#ifdef KEYMAP_ES
+    switch (k) {
+        case 0x34: return 0xD2; // Spanish dead-acute/diaeresis key (US ') -> MSX DEAD
+        case 0x2D: return 0x82; // Spanish ' key (US -) -> MSX '
+        case 0x38: return 0xA1; // Spanish - key (US /) -> MSX -
+        default:   break;
+    }
+#endif
+    return keycode_to_goauld[k];
+}
+
 // Event-driven make/break translation. Called on every HID keyboard report.
 // `report` is exactly 6 bytes of HID usage codes (0 = empty slot) for boot and
 // 6KRO reports; NKRO is expanded to the same flat form by the dispatcher.
@@ -447,7 +467,7 @@ void kb_report_receive(uint8_t modifiers, uint8_t const* report, u16 len) {
 			if(report[j] == k) { still_down = true; break; }
 		}
 		if(!still_down) {
-			uint8_t cell = keycode_to_goauld[k];
+			uint8_t cell = map_cell(k);
 			if(cell & 0x80) emit_event(OP_BREAK, cell); // commands have no break
 		}
 	}
@@ -461,7 +481,7 @@ void kb_report_receive(uint8_t modifiers, uint8_t const* report, u16 len) {
 			if(prev_keys[j] == k) { was_down = true; break; }
 		}
 		if(!was_down) {
-			uint8_t cell = keycode_to_goauld[k];
+			uint8_t cell = map_cell(k);
 			if(cell & 0x80) emit_event(OP_MAKE, cell);   // matrix key
 			else if(cell)   emit_command(cell);          // command opcode (F6..F12)
 		}

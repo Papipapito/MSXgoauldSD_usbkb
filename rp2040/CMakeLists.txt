@@ -66,4 +66,9 @@ target_compile_definitions(goauld_friend PRIVATE
     DEBUG_BAUDRATE=115200
 )
 
+# Optional Spanish keyboard layout variant: configure with -DKEYMAP_ES=1
+if(KEYMAP_ES)
+    target_compile_definitions(goauld_friend PRIVATE KEYMAP_ES=1)
+endif()
+
 pico_add_extra_outputs(goauld_friend)
