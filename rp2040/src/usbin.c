@@ -67,6 +67,15 @@
 #define JOY_A          0x10
 #define JOY_B          0x20
 
+// Autofire / turbo: while an autofire button is held, the matching fire bit is
+// square-waved press/release at AF_HALF_PERIOD_US to simulate rapid tapping.
+// 50 ms half-period = 10 Hz (50% duty) => >= 2 PSG frames asserted AND released
+// even on a 50 Hz PAL MSX, so every shot is scanned. Only the existing JOY_A /
+// JOY_B bits are toggled, so the 0xB0 wire protocol stays frozen.
+#define AF_HALF_PERIOD_US 50000ull  // 50 ms -> 10 Hz autofire (keep >= ~40 ms for PAL)
+#define AF_HID_BTN_A      2         // 3rd HID button bit -> autofire trigger A (JOY_A)
+#define AF_HID_BTN_B      3         // 4th HID button bit -> autofire trigger B (JOY_B)
+
 // Derived-modifier bit positions (logical, OR of L/R HID bits).
 #define DRV_SHIFT      0x01
 #define DRV_CTRL       0x02
@@ -144,14 +153,29 @@ void kb_send_resync(void) {
 // ---------------------------------------------------------------------------
 static uint8_t joy_state[2] = {0, 0};   // active-high shadow, indexed by port
 
-// Send-on-change: update the shadow and emit 0xB0 <port> <byte> when it changes.
-static void joy_set_state(uint8_t port, uint8_t b) {
+// ---- Autofire / turbo intent (port-indexed; only port 0 has a pad today) ----
+// The report callbacks latch two layers; the main-loop tick (joy_autofire_tick)
+// is the SOLE emitter and composes: out = joy_base | (af_phase ? af_arm : 0).
+static uint8_t  joy_base[2] = {0, 0};   // real held byte: directions + manual fire1/fire2
+static uint8_t  af_arm[2]   = {0, 0};   // fire bits (JOY_A/JOY_B) currently armed for autofire
+static bool     af_phase    = false;    // shared square-wave phase (keeps both ports in sync)
+static uint64_t af_next_us  = 0;        // time_us_64() deadline of the next phase flip
+
+// Send-on-change core. bump_led=true re-arms the white keypress/activity flash;
+// the autofire tick passes false so its 10 Hz edges keep the status LED on the
+// yellow "gamepad connected" colour instead of stealing it to white.
+static void joy_emit(uint8_t port, uint8_t b, bool bump_led) {
     if(port > 1 || b == joy_state[port]) return;
     joy_state[port] = b;
-    g_last_key_us = time_us_64();   // flash the status LED on joystick activity (detection aid)
+    if(bump_led) g_last_key_us = time_us_64();   // flash status LED on real joystick activity
     tx_push(OP_JOY);
     tx_push(port);
     tx_push(b);
+}
+
+// Send-on-change: update the shadow and emit 0xB0 <port> <byte> when it changes.
+static void joy_set_state(uint8_t port, uint8_t b) {
+    joy_emit(port, b, true);
 }
 
 // Re-emit both joystick ports (self-heals any dropped 0xB0 byte). Mirrors
@@ -161,6 +185,24 @@ void joy_send_resync(void) {
         tx_push(OP_JOY);
         tx_push(p);
         tx_push(joy_state[p]);
+    }
+}
+
+// Autofire square-wave tick. MUST run from the main super-loop (NOT the
+// event-driven report callbacks): a held-but-motionless pad sends no new USB
+// reports, so a callback-driven autofire would freeze the bit. Composes each
+// port as joy_base | (af_phase ? af_arm : 0) and emits via send-on-change with
+// NO LED bump, so autofire keeps the status LED yellow ("gamepad connected").
+void joy_autofire_tick(uint64_t now_us) {
+    if(af_next_us == 0) af_next_us = now_us + AF_HALF_PERIOD_US;   // lazy init
+    if((int64_t)(now_us - af_next_us) >= 0) {
+        af_phase   = !af_phase;
+        af_next_us = now_us + AF_HALF_PERIOD_US;   // = now+HALF (not +=): no catch-up bursts
+    }
+    for(uint8_t p = 0; p < 2; p++) {
+        uint8_t out = joy_base[p];
+        if(af_phase) out |= af_arm[p];             // assert armed fire bits this phase
+        joy_emit(p, out, false);                   // no LED bump: autofire stays yellow
     }
 }
 
@@ -622,7 +664,7 @@ void gamepad_report_receive(uint8_t dev_addr, uint8_t instance, uint8_t const* r
     }
   }
 
-  // ---- Buttons (Button page): button 1 -> A, button 2 -> B ----
+  // ---- Buttons (Button page): btn1 -> A, btn2 -> B (manual fire) ----
   if(hid_parse_find_bit_item_by_page(rpt_info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 0, &item)) {
     if(to_bit_value(item, report, len)) byte |= JOY_A;
   }
@@ -630,8 +672,23 @@ void gamepad_report_receive(uint8_t dev_addr, uint8_t instance, uint8_t const* r
     if(to_bit_value(item, report, len)) byte |= JOY_B;
   }
 
+  // ---- btn3 -> autofire A, btn4 -> autofire B (toggled by joy_autofire_tick) ----
+  // Pads with <3/<4 buttons: the lookup returns false, `item` is left untouched,
+  // to_bit_value is not called, and that trigger simply stays disarmed.
+  uint8_t af = 0;
+  if(hid_parse_find_bit_item_by_page(rpt_info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, AF_HID_BTN_A, &item)) {
+    if(to_bit_value(item, report, len)) af |= JOY_A;
+  }
+  if(hid_parse_find_bit_item_by_page(rpt_info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, AF_HID_BTN_B, &item)) {
+    if(to_bit_value(item, report, len)) af |= JOY_B;
+  }
+
   (void)dev_addr;
-  joy_set_state(0, byte);   // route to MSX joystick port 1 (port index 0)
+  // Latch intent for the autofire tick (the sole emitter). Flash the LED here on
+  // real activity so the white flash survives; the tick's autofire edges do not.
+  if(byte != joy_base[0] || af != af_arm[0]) g_last_key_us = time_us_64();
+  joy_base[0] = byte;   // base layer: directions + manual fire
+  af_arm[0]   = af;     // arm layer: which fires autofire (re-derived each report)
 }
 
 void tuh_kb_set_leds(uint8_t leds) {
@@ -666,6 +723,7 @@ void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_inter
     tuh_xinput_set_rumble(dev_addr, instance, 0, 0, true);
     g_joy_mounted = 1;                              // status LED -> yellow
     joy_set_state(0, 0);                            // clean baseline (no dir/fire)
+    joy_base[0] = 0; af_arm[0] = 0;                 // clear autofire intent on connect
     tuh_xinput_receive_report(dev_addr, instance);  // start polling
 }
 
@@ -673,6 +731,7 @@ void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance) {
     (void)dev_addr; (void)instance;
     g_joy_mounted = 0;
     joy_set_state(0, 0);                            // release direction/fire
+    joy_base[0] = 0; af_arm[0] = 0;                 // clear autofire intent on disconnect
 }
 
 void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance,
@@ -694,7 +753,14 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance,
         // Buttons: A -> trigger A (fire 1), B -> trigger B (fire 2)
         if (p->wButtons & XINPUT_GAMEPAD_A) b |= JOY_A;
         if (p->wButtons & XINPUT_GAMEPAD_B) b |= JOY_B;
-        joy_set_state(0, b);
+        // Spare face buttons X/Y arm autofire for trigger A/B (bumpers left free).
+        uint8_t af = 0;
+        if (p->wButtons & XINPUT_GAMEPAD_X) af |= JOY_A;
+        if (p->wButtons & XINPUT_GAMEPAD_Y) af |= JOY_B;
+        // Latch intent for the autofire tick (sole emitter); flash LED on real activity.
+        if (b != joy_base[0] || af != af_arm[0]) g_last_key_us = time_us_64();
+        joy_base[0] = b;
+        af_arm[0]   = af;
     }
     tuh_xinput_receive_report(dev_addr, instance);  // re-arm polling
 }
@@ -747,7 +813,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 						break;
 					}
 				}
-				joy_set_state(0, 0); // clean baseline: no direction/fire held
+				joy_set_state(0, 0); joy_base[0] = 0; af_arm[0] = 0; // clean baseline; clear autofire
 					g_joy_mounted = 1;   // status LED: a USB gamepad is connected
 			}
 		}
@@ -778,6 +844,7 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
 			gamepads[i].dev_addr = 0;
 			gamepads[i].instance = 0;
 			joy_set_state(0, 0);
+			joy_base[0] = 0; af_arm[0] = 0; // clear autofire intent on disconnect
 			g_joy_mounted = 0;
 			break;
 		}

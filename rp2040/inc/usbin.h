@@ -81,6 +81,7 @@ void kb_uart_init(void);     // configure uart0 + GPIO0 for the keyboard link
 void kb_tx_pump(void);       // drain the TX ring into the UART FIFO (non-blocking)
 void kb_send_resync(void);   // push a full-matrix resync frame (0xFE..0xFF)
 void joy_send_resync(void);  // re-emit both MSX joystick ports (0xB0 frames)
+void joy_autofire_tick(uint64_t now_us);  // main-loop autofire square-wave tick (10 Hz)
 
 void tuh_kb_set_leds(u8 leds);
 void tuh_hid_mount_cb(u8 dev_addr, u8 instance, u8 const* desc_report, u16 desc_len);

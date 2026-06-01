@@ -117,6 +117,8 @@ int main() {
 
         uint64_t now = time_us_64();
 
+        joy_autofire_tick(now);   // advance autofire square wave + emit composed joy byte
+
         // Periodic full-matrix resync (also self-heals any dropped byte).
         if ((int64_t)(now - next_resync) >= 0) {
             kb_send_resync();
