@@ -43,7 +43,7 @@ A single WS2812 showing one **priority** colour:
 ### Optional external 8-LED panel (on the case)
 An 8× WS2812 stick mounted on the case turns the status into a **panel where each LED is a different signal** (instead of one colour). Driven from **RP2040 GP14**; the on-board LED keeps working alongside it.
 
-![WS2812-8 RGB strip](pics/ws2812_8_strip.png)
+![WS2812-8 RGB strip](pics/ws2812_8_strip.jpg)
 
 **Board:** a generic **WS2812-8 RGB** stick (8 × WS2812 / NeoPixel on a PCB) — e.g. [AliExpress (product 1005009810895755)](https://www.aliexpress.com/item/1005009810895755.html).
 
