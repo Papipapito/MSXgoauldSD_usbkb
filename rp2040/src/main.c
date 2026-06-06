@@ -33,13 +33,13 @@
 // ---- External WS2812 status STRIP on the case (visible status bar) ----------
 // Daisy-chained WS2812 on STRIP_PIN, driven by its own PIO state machine; all
 // LEDs mirror the on-board status LED's colour (a bright bar). Wiring:
-//   STRIP_PIN (GPIO1) -> strip DIN   (3.3V data, direct from the RP2040)
+//   STRIP_PIN (GPIO14) -> strip DIN  (3.3V data, direct from the RP2040)
 //   strip GND         -> common GND
 //   strip +V          -> ~4.3V: one silicon diode (1N4007) from the MSX +5V.
 //     The 4-7V strip's VIH (~0.7*Vcc) then sits below 3.3V, so it accepts the
 //     RP2040's 3.3V data with NO level shifter. (5V direct also works on many
 //     4-7V strips; add the diode only if colours glitch.)
-#define STRIP_PIN   1
+#define STRIP_PIN   14    // GP14: bottom-edge pad on the RP2040-Zero, easy to solder
 #define STRIP_LEDS  8
 static PIO  s_strip_pio  = pio0;
 static uint s_strip_sm   = 1;     // on-board NeoPixel uses SM0; the strip uses SM1
@@ -125,7 +125,7 @@ int main() {
     tusb_init();
 
     status_led_init();
-    strip_init();          // external 8-LED status strip on the case (GPIO1)
+    strip_init();          // external 8-LED status strip on the case (GPIO14)
 
     // Launch Core 1
     multicore_launch_core1(core1_entry);
