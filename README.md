@@ -28,7 +28,10 @@ The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bu
 
 > The `.uf2` targets the **RP2040-Zero**. For a plain Raspberry Pi Pico, rebuild with `-DRP2040_ZERO=0` (mono LED on GPIO25).
 
-## Status LED (WS2812)
+## Status LEDs (WS2812)
+
+### On-board LED (RP2040-Zero)
+A single WS2812 showing one **priority** colour:
 | Colour | Meaning |
 |---|---|
 | 🔵 Blue blink (3×) at power-up | Firmware booted OK |
@@ -36,6 +39,46 @@ The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bu
 | 🟢 Solid green | USB **keyboard** connected |
 | 🟡 Solid yellow | USB **gamepad** connected |
 | ⚪ White flash | Key press / joystick activity |
+
+### Optional external 8-LED panel (on the case)
+An 8× WS2812 stick mounted on the case turns the status into a **panel where each LED is a different signal** (instead of one colour). Driven from **RP2040 GP14**; the on-board LED keeps working alongside it.
+
+![WS2812-8 RGB strip](pics/ws2812_8_strip.png)
+
+**Board:** a generic **WS2812-8 RGB** stick (8 × WS2812 / NeoPixel on a PCB) — e.g. [AliExpress (product 1005009810895755)](https://www.aliexpress.com/item/1005009810895755.html).
+
+**Pinout** — two pad rows; **use the `DIN` side** (the `DOUT` side just chains a second strip):
+
+| Side | Pads |
+|---|---|
+| **Input (use this)** | `GND` · **`DIN`** · `5V` · `GND` |
+| Output (chain) | `GND` · `DOUT` · `5V` · `GND` |
+
+**Wiring** — the strip is rated **4–7 VDC**:
+```
+RP2040 GP14  ->  strip DIN    (3.3 V data, direct -- no level shifter)
+common GND   ->  strip GND
+MSX +5V --|>|-   strip 5V      one 1N4007 silicon diode -> ~4.3 V (inside the
+                               4-7 V range). The strip's VIH (~0.7*Vcc) then sits
+                               below 3.3 V, so it reads the RP2040's 3.3 V data.
+                               5 V direct often works too -- add the diode only
+                               if the colours glitch.
+```
+
+**What each LED means** — LED **0** is the one nearest the `DIN` connector:
+
+| # | Colour | Signal |
+|---|---|---|
+| 0 | 🔴 red | **Power** — system on (always lit) |
+| 1 | 🔵 blue | USB **keyboard** detected |
+| 2 | 🟡 yellow | USB **gamepad** detected |
+| 3 | ⚪ white | **Typing** — flashes on key press |
+| 4 | 🟢 green | **Fire A** / button 1 (blinks at 10 Hz while autofiring) |
+| 5 | 🟣 magenta | **Fire B** / button 2 (blinks at 10 Hz while autofiring) |
+| 6 | 🩵 cyan | **Direction** — any joystick movement |
+| 7 | 💚 dim green | **Heartbeat** (~1 Hz, shows the firmware is alive) |
+
+> To change the data pin, the LED order or the colours, edit `STRIP_PIN` / the `f[...]` lines in [`rp2040/src/main.c`](rp2040/src/main.c). `STRIP_LEDS` defaults to 8.
 
 ## Flashing (both files)
 1. **FPGA** — Gowin Programmer → load `MSXgoauldSD_usbkb.fs` into the Tang Nano 20K (SRAM for a quick test, or the external config flash to persist). Your BIOS pack at `0x200000` is untouched.
