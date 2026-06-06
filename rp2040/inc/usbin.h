@@ -63,6 +63,16 @@ extern uint8_t kb_keys[120];
 extern uint8_t isMounted;
 extern volatile uint64_t g_last_key_us;  // time_us_64() of the last MAKE; for the status LED
 extern volatile uint8_t  g_joy_mounted;        // nonzero while a USB gamepad is connected (status LED)
+extern volatile uint64_t g_last_kbd_us;        // keyboard-only MAKE timestamp (case-strip "typing" LED)
+extern volatile uint8_t  g_kbd_mounted;        // nonzero while a USB keyboard is mounted (case-strip)
+extern volatile uint8_t  g_joy_out;            // live transmitted joystick byte, port 0 (case-strip A/B/dirs)
+// Active-high joystick byte bits (mirror of usbin.c JOY_*; for the case-strip panel).
+#define JOYO_RIGHT 0x01
+#define JOYO_LEFT  0x02
+#define JOYO_DOWN  0x04
+#define JOYO_UP    0x08
+#define JOYO_A     0x10
+#define JOYO_B     0x20
 extern tusb_desc_device_t desc_device;
 
 bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, u8 type, u16 page, u8 bit, const hid_report_item_t **item);

@@ -97,6 +97,9 @@ static uint8_t prev_keys[16];
 // Previous derived (logical) modifier state: {SHIFT,CTRL,GRAPH,CODE}.
 static uint8_t prev_derived = 0;
 volatile uint64_t g_last_key_us = 0;  // updated on each MAKE; read by the status LED in main.c
+volatile uint64_t g_last_kbd_us = 0;  // keyboard-only MAKE timestamp (case-strip "typing" LED)
+volatile uint8_t  g_kbd_mounted = 0;  // nonzero while a USB keyboard is mounted (case-strip)
+volatile uint8_t  g_joy_out     = 0;  // live transmitted joystick byte, port 0 (case-strip panel)
 
 // Non-blocking TX ring buffer (drained in main() by kb_tx_pump()).
 static volatile uint8_t txbuf[256];
@@ -123,7 +126,7 @@ void kb_tx_pump(void) {
 
 // Emit a MAKE/BREAK event for a matrix cell and update the shadow matrix.
 static void emit_event(uint8_t op, uint8_t cell) {
-    if(op == OP_MAKE) g_last_key_us = time_us_64();  // for the status-LED keypress flash
+    if(op == OP_MAKE) { g_last_key_us = time_us_64(); g_last_kbd_us = g_last_key_us; }  // status LED + case-strip typing
     uint8_t row = cell & 0x0F;
     uint8_t bit = (cell >> 4) & 0x07;
     if(row <= 10) {
@@ -167,6 +170,7 @@ static uint64_t af_next_us  = 0;        // time_us_64() deadline of the next pha
 static void joy_emit(uint8_t port, uint8_t b, bool bump_led) {
     if(port > 1 || b == joy_state[port]) return;
     joy_state[port] = b;
+    if(port == 0) g_joy_out = b;                 // live joy byte for the case-strip panel (A/B/dirs)
     if(bump_led) g_last_key_us = time_us_64();   // flash status LED on real joystick activity
     tx_push(OP_JOY);
     tx_push(port);
@@ -791,6 +795,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 					break;
 				}
 			}
+			g_kbd_mounted = 1;   // case-strip: a USB keyboard is connected
 			// Establish a clean baseline on the FPGA: nothing pressed yet.
 			memset(vmatrix, 0xFF, sizeof(vmatrix));
 			memset(prev_keys, 0, sizeof(prev_keys));
@@ -830,6 +835,8 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
 			break;
 		}
 	}
+	g_kbd_mounted = 0;
+	for(uint8_t i = 0; i < 8; i++) if(keyboards[i].dev_addr) { g_kbd_mounted = 1; break; }
 	// Keyboard gone: release everything on the FPGA so no key stays stuck.
 	memset(vmatrix, 0xFF, sizeof(vmatrix));
 	memset(prev_keys, 0, sizeof(prev_keys));

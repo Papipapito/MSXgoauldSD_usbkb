@@ -78,11 +78,19 @@ static void strip_init(void) {
         s_ws2812_off = pio_add_program(s_strip_pio, &ws2812_program);
     ws2812_program_init(s_strip_pio, s_strip_sm, (uint)s_ws2812_off, STRIP_PIN, 800000.f, false);
 }
-// Fill all STRIP_LEDS with one colour (the status bar).
+// Fill all STRIP_LEDS with one colour (used for the boot blink).
 static inline void strip_rgb(uint8_t r, uint8_t g, uint8_t b) {
     uint32_t grb = ((uint32_t)g << 16) | ((uint32_t)r << 8) | (uint32_t)b;
     for (int i = 0; i < STRIP_LEDS; i++)
         pio_sm_put_blocking(s_strip_pio, s_strip_sm, grb << 8u);
+}
+// Push a per-LED frame (STRIP_LEDS colours packed as 0xRRGGBB) to the strip.
+static inline void strip_push(const uint32_t *c) {
+    for (int i = 0; i < STRIP_LEDS; i++) {
+        uint8_t r = (uint8_t)(c[i] >> 16), g = (uint8_t)(c[i] >> 8), b = (uint8_t)c[i];
+        uint32_t grb = ((uint32_t)g << 16) | ((uint32_t)r << 8) | (uint32_t)b;
+        pio_sm_put_blocking(s_strip_pio, s_strip_sm, grb << 8u);
+    }
 }
 
 #define BUF_COUNT   4
@@ -144,6 +152,8 @@ int main() {
 
     uint64_t next_resync = time_us_64() + RESYNC_INTERVAL_US;
     uint32_t led_prev = 0xFFFFFFFFu;
+    uint32_t strip_prev[STRIP_LEDS];
+    for (int i = 0; i < STRIP_LEDS; i++) strip_prev[i] = 0xFFFFFFFFu;  // force first push
 
     while (1) {
         tuh_task();      // service USB host (fills the TX ring via callbacks)
@@ -161,16 +171,38 @@ int main() {
             next_resync = now + RESYNC_INTERVAL_US;
         }
 
-        // ---- Status LED: white (key/joystick) > yellow (gamepad) > green (keyboard) > red (idle) ----
+        // ---- On-board status LED: single priority colour (white>yellow>green>red) ----
         uint32_t led;
-        if      ((uint64_t)(now - g_last_key_us) < 70000ull) led = 0x202020u;  // white flash on keypress / joystick activity
-        else if (g_joy_mounted)                              led = 0x141400u;  // yellow: USB gamepad connected
-        else if (isMounted)                                  led = 0x002000u;  // green: USB keyboard connected
-        else                                                 led = 0x1A0000u;  // red: nothing connected
+        if      ((uint64_t)(now - g_last_key_us) < 70000ull) led = 0x202020u;  // white: activity
+        else if (g_joy_mounted)                              led = 0x141400u;  // yellow: gamepad
+        else if (isMounted)                                  led = 0x002000u;  // green: keyboard
+        else                                                 led = 0x1A0000u;  // red: idle
         if (led != led_prev) {
             status_led_rgb((uint8_t)(led >> 16), (uint8_t)(led >> 8), (uint8_t)led);
-            strip_rgb     ((uint8_t)(led >> 16), (uint8_t)(led >> 8), (uint8_t)led);  // case strip mirrors status
             led_prev = led;
+        }
+
+        // ---- Case strip: an 8-LED panel, each LED a different signal --------
+        //  [0] power red (always)      [1] keyboard blue (mounted)
+        //  [2] joystick yellow (mounted) [3] typing white (key flash)
+        //  [4] fire A green             [5] fire B magenta   (both blink at 10Hz on autofire)
+        //  [6] direction cyan (any dir) [7] heartbeat dim-green (~1Hz, "alive")
+        uint8_t  joy    = g_joy_out;
+        bool     typing = (uint64_t)(now - g_last_kbd_us) < 90000ull;
+        uint32_t f[STRIP_LEDS];
+        f[0] = 0x140000u;                                                          // power: red
+        f[1] = g_kbd_mounted ? 0x000018u : 0;                                      // keyboard: blue
+        f[2] = g_joy_mounted ? 0x141400u : 0;                                      // joystick: yellow
+        f[3] = typing ? 0x101010u : 0;                                             // typing: white
+        f[4] = (joy & JOYO_A) ? 0x001400u : 0;                                     // fire A: green
+        f[5] = (joy & JOYO_B) ? 0x140014u : 0;                                     // fire B: magenta
+        f[6] = (joy & (JOYO_UP|JOYO_DOWN|JOYO_LEFT|JOYO_RIGHT)) ? 0x001414u : 0;   // direction: cyan
+        f[7] = ((now / 500000ull) & 1ull) ? 0x000600u : 0;                         // heartbeat: ~1Hz dim green
+        bool strip_changed = false;
+        for (int i = 0; i < STRIP_LEDS; i++) if (f[i] != strip_prev[i]) strip_changed = true;
+        if (strip_changed) {                       // send-on-change: crisp blinks, PIO not flooded
+            strip_push(f);
+            for (int i = 0; i < STRIP_LEDS; i++) strip_prev[i] = f[i];
         }
     }
 
