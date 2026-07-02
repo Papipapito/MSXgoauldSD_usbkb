@@ -828,6 +828,13 @@ end
                               (ver_index == 2'd1) ? ff_pack_version :
                               (ver_index == 2'd2) ? ver_status      : FPGA_VERSION;
 
+    // Red-border warning: assert ONLY on stable, real mismatches -- a loaded pack
+    // whose version differs (incl. 0xFF pre-v1.2 packs) or an ANNOUNCED uf2 whose
+    // version differs. Excludes 0x00 (pack not yet loaded at boot; RP2040 optional
+    // / not announced) so there is no false red at boot and none without a Pico.
+    wire version_mismatch = (ff_pack_version != 8'h00 && ff_pack_version != FPGA_VERSION) ||
+                            (kbd_fw_version  != 8'h00 && kbd_fw_version  != FPGA_VERSION);
+
     //expanded slots 0 & 3
     reg [7:0] exp_slot0;
     wire [1:0] exp_slot0_page;
@@ -1098,6 +1105,8 @@ end
 
         .VideoDHClk(VideoDHClk),
         .VideoDLClk(VideoDLClk),
+
+        .version_mismatch(version_mismatch),
 
         .tmds_clk_p    (clk_p),
         .tmds_clk_n    (clk_n),

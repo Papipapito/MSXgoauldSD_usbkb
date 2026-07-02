@@ -36,7 +36,9 @@ Since **v1.2**, the bitstream, the RP2040 firmware and the BIOS pack all carry t
 - **`.uf2`** — `FW_VERSION` in [`rp2040/inc/usbin.h`](rp2040/inc/usbin.h); the RP2040 announces it over the UART link (`0xC0 <ver>`, re-sent with every 250 ms resync — old bitstreams simply ignore it).
 - **BIOS pack** — the **last byte** of the 512 KB pack (offset `0x7FFFF`, flash `0x27FFFF`); the FPGA latches it while loading the pack at boot. Packs that predate v1.2 read `0xFF` there.
 
-The FPGA exposes everything on I/O ports **0x2E/0x2F** (reads are served by the FPGA only; same `0x2F` convention as MSXnano):
+**Automatic warning (no software needed):** if the versions do **not** match — e.g. you flash a new `.fs` but keep an old BIOS pack, or run a firmware from another version — the FPGA paints a **thick red border around the screen** while the machine runs. It disappears as soon as all three match. The RP2040 is optional: with **no Pico connected** there is **no border** (only a *mismatched* Pico or an *old pack* triggers it).
+
+For scripted checks, the FPGA also exposes everything on I/O ports **0x2E/0x2F** (reads are served by the FPGA only; same `0x2F` convention as MSXnano):
 
 | Access | Returns |
 |---|---|
