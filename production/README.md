@@ -6,9 +6,10 @@ Prebuilt binaries for the USB keyboard + joystick fork. See the **[main README](
 | File | What it is |
 |---|---|
 | `MSXgoauldSD_usbkb.fs` | FPGA bitstream (Tang Nano 20K, GW2AR-18): MSX2+ core + USB keyboard/joystick merge. |
-| `rp2040_keyboard.uf2` | RP2040 firmware (RP2040-Zero, WS2812 LED on GPIO16): USB keyboard (US/International) + USB joystick (HID + XInput). |
+| `rp2040_keyboard.uf2` | RP2040 firmware — **Waveshare RP2040-Zero** (on-board WS2812 LED on GPIO16): USB keyboard (US/International) + USB joystick (HID + XInput). |
+| `rp2040_keyboard_pico.uf2` | Same firmware built for a plain **Raspberry Pi Pico** (mono LED on GPIO25). |
 
-> The `.uf2` targets the **RP2040-Zero**. For a plain Raspberry Pi Pico, rebuild with `-DRP2040_ZERO=0` (mono LED on GPIO25).
+> Both builds also drive the optional external 8-LED WS2812 status panel on **GP14** (Pico physical pin 19) — see the main README.
 
 ## Status LED
 | Colour | Meaning |

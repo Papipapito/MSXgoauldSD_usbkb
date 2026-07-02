@@ -24,9 +24,10 @@ The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bu
 | File | What it is |
 |---|---|
 | `MSXgoauldSD_usbkb.fs` | FPGA bitstream (Tang Nano 20K, GW2AR-18) with the keyboard + joystick merge. |
-| `rp2040_keyboard.uf2` | RP2040 firmware (Waveshare RP2040-Zero, WS2812 LED on GPIO16). |
+| `rp2040_keyboard.uf2` | RP2040 firmware — **Waveshare RP2040-Zero** (on-board WS2812 LED on GPIO16). |
+| `rp2040_keyboard_pico.uf2` | RP2040 firmware — **Raspberry Pi Pico** (mono LED on GPIO25). |
 
-> The `.uf2` targets the **RP2040-Zero**. For a plain Raspberry Pi Pico, rebuild with `-DRP2040_ZERO=0` (mono LED on GPIO25).
+> Both builds drive the optional external 8-LED WS2812 panel on **GP14** (see *Status LEDs*). They are the same firmware, built with `-DRP2040_ZERO=1/0`.
 
 ## Status LEDs (WS2812)
 
