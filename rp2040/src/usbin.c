@@ -51,6 +51,7 @@
 #define KB_UART        uart0
 #define OP_MAKE        0x90
 #define OP_BREAK       0xA0
+#define OP_VERSION     0xC0   // 0xC0 <FW_VERSION> = version-guard announce (additive; old FPGAs ignore it)
 #define RESYNC_START   0xFE
 #define RESYNC_END     0xFF
 
@@ -144,6 +145,10 @@ static void emit_command(uint8_t cmd) {
 
 // Push a full-matrix resync frame onto the TX ring.
 void kb_send_resync(void) {
+    // Version-guard announce rides on every resync so the FPGA always knows the
+    // firmware version (self-healing, like the matrix itself).
+    tx_push(OP_VERSION);
+    tx_push(FW_VERSION);
     tx_push(RESYNC_START);
     for(uint8_t r = 0; r < 11; r++) tx_push(vmatrix[r]);
     tx_push(RESYNC_END);

@@ -479,6 +479,9 @@ end
                      ( ppi_req_r == 1 ) ? ppi_port_a :
                      ( slot0_req_r == 1 ) ? 8'hff :
                      ( slotx_req_r == 1 ) ? 8'hff :
+                     // Version guard reads (see the 0x2E/0x2F block by the PSG merge)
+                     ( ver_fpga_req_r ) ? FPGA_VERSION :
+                     ( ver_sel_req_r  ) ? ver_sel_dout :
                      // USB-keyboard merge: on an I/O 0xA9 keyboard-column read,
                      // AND the physical PPI read (bus_data) with the virtual
                      // matrix row. Both are active-low, so a key pressed on
@@ -778,6 +781,53 @@ end
                                 (!psg_reg15_joy_sel[1]) ? joy1_msx :
                                 8'hFF;
 
+    //----------------------------------------------------------------
+    //-- Version guard (I/O 0x2E/0x2F) -- keeps the three flashables in step.
+    //--   All three artifacts carry the SAME BCD version (0x12 = v1.2):
+    //--     .fs  = FPGA_VERSION below;
+    //--     .uf2 = announced by the RP2040 as 0xC0 <ver> with every 250 ms
+    //--            resync (fw_version from kbd_uart_rx; 0x00 = link down);
+    //--     .bin = LAST byte of the 512KB BIOS pack (flash 0x27FFFF), latched
+    //--            by the flash loader FSM while it streams the pack at boot.
+    //--   Reads (never driven onto the external bus, cpu_din substitution only):
+    //--     IN 0x2F          -> FPGA_VERSION
+    //--     OUT 0x2F,n       -> select what IN 0x2E returns:
+    //--     IN 0x2E (n=0)    -> RP2040 firmware version (0x00 = not announced)
+    //--     IN 0x2E (n=1)    -> BIOS pack version byte  (0xFF = pre-v1.2 pack)
+    //--     IN 0x2E (n=2)    -> verify status: 0x00 = ALL MATCH, else
+    //--                         bit0 uf2 mismatch, bit1 uf2 not announced,
+    //--                         bit2 pack mismatch, bit3 pack has no version
+    //--   BASIC check:  OUT &H2F,2 : IF INP(&H2E)=0 THEN PRINT"OK"
+    //--   Same 0x2F convention as MSXnano (0x19 = v1.9). Note: the separate
+    //--   bus-monitor diagnostic bitstream uses 0x2C/0x2D -- no overlap.
+    //--   Caveat: reads of 0x2E/0x2F shadow the S-1985 engine test registers
+    //--   on machines that have one (writes still reach the real bus).
+    //----------------------------------------------------------------
+    localparam [7:0] FPGA_VERSION = 8'h12;   // v1.2 -- bump together with FW_VERSION (usbin.h) and the pack byte
+
+    wire [7:0] kbd_fw_version;               // from kbd_uart_rx (0xC0 announce)
+
+    // OUT 0x2F latches the read-index for 0x2E.
+    reg [1:0] ver_index;
+    always @(posedge clk_54m or negedge bus_reset_n)
+        if (!bus_reset_n) ver_index <= 2'd0;
+        else if (bus_addr[7:0] == 8'h2F && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1)
+            ver_index <= cpu_dout[1:0];
+
+    wire ver_fpga_req_r = (bus_addr[7:0] == 8'h2F && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
+    wire ver_sel_req_r  = (bus_addr[7:0] == 8'h2E && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
+
+    // The FPGA does the verification: 0x00 = everything matches.
+    wire [7:0] ver_status = { 4'b0000,
+                              (ff_pack_version == 8'hFF || ff_pack_version == 8'h00), // bit3: pack has no version byte
+                              (ff_pack_version != FPGA_VERSION),                      // bit2: pack mismatch
+                              (kbd_fw_version  == 8'h00),                             // bit1: uf2 not announced / link down
+                              (kbd_fw_version  != FPGA_VERSION) };                    // bit0: uf2 mismatch
+
+    wire [7:0] ver_sel_dout = (ver_index == 2'd0) ? kbd_fw_version  :
+                              (ver_index == 2'd1) ? ff_pack_version :
+                              (ver_index == 2'd2) ? ver_status      : FPGA_VERSION;
+
     //expanded slots 0 & 3
     reg [7:0] exp_slot0;
     wire [1:0] exp_slot0_page;
@@ -965,6 +1015,7 @@ end
         .vkey_row_out        (vkey_row),
         .joy_state0          (joy_usb0),
         .joy_state1          (joy_usb1),
+        .fw_version          (kbd_fw_version),
         .cmd_scanline_toggle (),
         .cmd_reset_pulse     (),
         .cmd_osd_toggle      ()
@@ -1677,6 +1728,13 @@ memory_ctrl mem1 (
 
 //flash
     reg [23:0] ff_flash_addr = 24'd0;
+
+    // Version guard: the pack's version byte is the LAST byte of the 512KB BIOS
+    // pack (flash 0x200000 + 0x7FFFF). The loader streams the whole pack at
+    // boot, so we just latch that byte as it goes by. 0x00 until read; 0xFF on
+    // packs that predate the version guard.
+    localparam [23:0] PACK_VER_FLASH_ADDR = 24'h27FFFF;
+    reg [7:0] ff_pack_version = 8'h00;
     reg ff_flash_rd = 0;
     reg ff_flash_terminate = 0;
     reg [7:0] ff_rom_dout;
@@ -1808,8 +1866,13 @@ memory_ctrl mem1 (
     
                             ff_rom_wr <= 1;
                             ff_rom_addr <= ff_rom_addr + 1;
-                            ff_rom_dout <= flash_dout; 
-    
+                            ff_rom_dout <= flash_dout;
+
+                            // Version guard: capture the pack version byte as
+                            // the loader streams past it (same data, same beat).
+                            if (ff_flash_addr == PACK_VER_FLASH_ADDR)
+                                ff_pack_version <= flash_dout;
+
                         end
                     end else begin    
                         ff_rom_wr <= 0;

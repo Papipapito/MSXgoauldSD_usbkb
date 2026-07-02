@@ -11,6 +11,8 @@ Prebuilt binaries for the USB keyboard + joystick fork. See the **[main README](
 
 > Both builds also drive the optional external 8-LED WS2812 status panel on **GP14** (Pico physical pin 19) — see the main README.
 
+> **Version guard (v1.2+):** the `.fs`, the `.uf2` and the BIOS pack carry the same version (`0x12`) and the FPGA verifies it on I/O `0x2E/0x2F`. From MSX-BASIC: `OUT &H2F,2 : IF INP(&H2E)=0 THEN PRINT "VERSIONS OK"` — see the main README for the full port map.
+
 ## Status LED
 | Colour | Meaning |
 |---|---|

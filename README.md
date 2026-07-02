@@ -29,6 +29,28 @@ The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bu
 
 > Both builds drive the optional external 8-LED WS2812 panel on **GP14** (see *Status LEDs*). They are the same firmware, built with `-DRP2040_ZERO=1/0`.
 
+## Version guard (keep the three flashables in step)
+Since **v1.2**, the bitstream, the RP2040 firmware and the BIOS pack all carry the **same BCD version** (`0x12` = v1.2) and the **FPGA verifies it**:
+
+- **`.fs`** — `FPGA_VERSION` in [`fpga/top.v`](fpga/top.v).
+- **`.uf2`** — `FW_VERSION` in [`rp2040/inc/usbin.h`](rp2040/inc/usbin.h); the RP2040 announces it over the UART link (`0xC0 <ver>`, re-sent with every 250 ms resync — old bitstreams simply ignore it).
+- **BIOS pack** — the **last byte** of the 512 KB pack (offset `0x7FFFF`, flash `0x27FFFF`); the FPGA latches it while loading the pack at boot. Packs that predate v1.2 read `0xFF` there.
+
+The FPGA exposes everything on I/O ports **0x2E/0x2F** (reads are served by the FPGA only; same `0x2F` convention as MSXnano):
+
+| Access | Returns |
+|---|---|
+| `IN &H2F` | FPGA version (`&H12`) |
+| `OUT &H2F,0` then `IN &H2E` | RP2040 firmware version (`0` = not announced / link down) |
+| `OUT &H2F,1` then `IN &H2E` | BIOS pack version byte (`&HFF` = pre-v1.2 pack) |
+| `OUT &H2F,2` then `IN &H2E` | **Verify status: `0` = everything matches**; bit0 = uf2 mismatch, bit1 = uf2 not announced, bit2 = pack mismatch, bit3 = pack has no version |
+
+Quick check from MSX-BASIC:
+```basic
+OUT &H2F,2 : IF INP(&H2E)=0 THEN PRINT "VERSIONS OK" ELSE PRINT "MISMATCH! ";INP(&H2E)
+```
+When releasing, bump `FPGA_VERSION`, `FW_VERSION` and the pack byte **together**.
+
 ## Status LEDs (WS2812)
 
 ### On-board LED (RP2040-Zero)
