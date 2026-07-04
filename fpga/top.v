@@ -954,9 +954,43 @@ end
         end
     end
 
-    assign cpu_clk_54     = (turbo_safe == 1) ? clk_6m75_54 : bus_clk_3m6_54;
-    assign main_clk_enable  = (turbo_safe == 1) ? clk_enable_6m75_54 : clk_enable_3m6_54;
-    assign main_clk_falling = (turbo_safe == 1) ? clk_falling_6m75_54 : clk_falling_3m6_54;
+    // ===== Panasonic-WSX 5.37 MHz turbo cadence (ported from MSXnano v1.9) =====
+    // Replaces jabadiagm's 6.75 MHz turbo. The turbo TOGGLE (config menu ->
+    // config_enable_turbo -> turbo_safe) and the mux below are UNCHANGED; only the
+    // clock selected in turbo changes 6.75 -> 5.37. /20 on clk_108m -> 5.40 MHz +
+    // "period swallow" (mask 1 of every 176 periods) -> EXACT WSX 5.369318 Hz.
+    reg [4:0] div20_cnt = 0;
+    reg       clk_5m4_internal = 0;
+    always @(posedge clk_108m or negedge bus_reset_n) begin
+        if (~bus_reset_n) begin div20_cnt <= 0; clk_5m4_internal <= 0; end
+        else if (div20_cnt >= 5'd9) begin clk_5m4_internal <= ~clk_5m4_internal; div20_cnt <= 0; end
+        else div20_cnt <= div20_cnt + 1;
+    end
+    reg s5m4_a = 0, s5m4_b = 0;
+    always @(posedge clk_54m) begin s5m4_a <= clk_5m4_internal; s5m4_b <= s5m4_a; end
+    wire clk_enable_5m4_raw  = (s5m4_b == 0 && s5m4_a == 1);
+    wire clk_falling_5m4_raw = (s5m4_b == 1 && s5m4_a == 0);
+    reg [7:0] pana_per_cnt   = 0;
+    reg       pana_skip_pend = 0;
+    wire      pana_skip_now  = (pana_per_cnt == 8'd175) && clk_enable_5m4_raw;
+    always @(posedge clk_54m) begin
+        if (~bus_reset_n) begin pana_per_cnt <= 0; pana_skip_pend <= 0; end
+        else begin
+            if (clk_enable_5m4_raw) begin
+                if (pana_per_cnt == 8'd175) begin pana_per_cnt <= 0; pana_skip_pend <= 1; end
+                else pana_per_cnt <= pana_per_cnt + 1'b1;
+            end
+            if (pana_skip_pend && clk_falling_5m4_raw) pana_skip_pend <= 0;
+        end
+    end
+    wire clk_5m37_54         = s5m4_a;                              // clock level for cpu_clk_54
+    wire clk_enable_5m37_54  = clk_enable_5m4_raw  & ~pana_skip_now;
+    wire clk_falling_5m37_54 = clk_falling_5m4_raw & ~pana_skip_pend;
+
+    // Turbo mux: 5.37 WSX cadence when turbo, untouched 3.6 MHz otherwise.
+    assign cpu_clk_54     = (turbo_safe == 1) ? clk_5m37_54 : bus_clk_3m6_54;
+    assign main_clk_enable  = (turbo_safe == 1) ? clk_enable_5m37_54 : clk_enable_3m6_54;
+    assign main_clk_falling = (turbo_safe == 1) ? clk_falling_5m37_54 : clk_falling_3m6_54;
 
     `ifdef ENABLE_WAIT
         assign cpu_clk_enable  = main_clk_enable & wait_io & wait_addr;
