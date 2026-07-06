@@ -27,8 +27,9 @@
  */
 #include "usbin.h"
 #include "pico/time.h"   // time_us_64() for the status-LED keypress flash
-#include "hardware/uart.h"
+#include "hardware/pio.h"
 #include "hardware/gpio.h"
+#include "uart_tx.pio.h"  // PIO UART TX (FPGA link on GP15, a non-HW-UART pin)
 #include <string.h>
 #include "xinput_host.h"  // vendored Ryzee119 XInput host driver (MIT) -> same joystick path
 
@@ -40,7 +41,7 @@
 // the MSX BIOS does autorepeat, so we never block and never auto-release.
 //
 // Wire protocol (FROZEN -- must match the FPGA RX side exactly):
-//   UART0 @ 115200 8N1, GPIO0 = TX -> FPGA pin 75 (RX).
+//   PIO UART @ 115200 8N1, GP15 = TX -> FPGA pin 75 (RX).
 //   cell byte         = 0x80 | (bit<<4) | row     row 0..10, bit 0..7
 //   0x90 <cell>       = MAKE
 //   0xA0 <cell>       = BREAK
@@ -48,7 +49,12 @@
 //   full resync       = 0xFE, vmatrix[0..10] (active-low), 0xFF
 // ---------------------------------------------------------------------------
 
-#define KB_UART        uart0
+// FPGA link = PIO UART TX on GP15. The RP2040 HW UART0/1 TX only reach
+// GP0/12/16/28 or GP4/8/20/24; the carrier redesign needs GP15, so we drive it
+// from PIO (pio1 SM0 -- pio0 SM0/SM1 are the on-board + case WS2812 strips).
+#define KB_UART_PIN    15
+#define KB_PIO         pio1
+#define KB_SM          0u
 #define OP_MAKE        0x90
 #define OP_BREAK       0xA0
 #define OP_VERSION     0xC0   // 0xC0 <FW_VERSION> = version-guard announce (additive; old FPGAs ignore it)
@@ -118,10 +124,10 @@ static inline void tx_push(uint8_t b) {
     tx_head = next;
 }
 
-// Drain the TX ring into the UART FIFO without blocking. Called from main loop.
+// Drain the TX ring into the PIO UART's TX FIFO without blocking. From main loop.
 void kb_tx_pump(void) {
-    while(tx_tail != tx_head && uart_is_writable(KB_UART)) {
-        uart_get_hw(KB_UART)->dr = txbuf[tx_tail++];
+    while(tx_tail != tx_head && !pio_sm_is_tx_fifo_full(KB_PIO, KB_SM)) {
+        pio_sm_put(KB_PIO, KB_SM, (uint32_t)txbuf[tx_tail++]);
     }
 }
 
@@ -219,10 +225,9 @@ void joy_autofire_tick(uint64_t now_us) {
 // This is the ONLY owner of uart0 -- stdio must not be routed here (see main.c).
 void kb_uart_init(void) {
     memset(vmatrix, 0xFF, sizeof(vmatrix)); // all keys released at boot
-    uart_init(KB_UART, 115200);
-    uart_set_format(KB_UART, 8, 1, UART_PARITY_NONE); // 8N1 (explicit)
-    uart_set_fifo_enabled(KB_UART, true);
-    gpio_set_function(0, GPIO_FUNC_UART); // GPIO0 = uart0 TX -> FPGA pin 75 (RX)
+    // PIO UART TX on GP15 -> FPGA pin 75 (RX), 115200 8N1. pio1 SM0.
+    uint off = pio_add_program(KB_PIO, &uart_tx_program);
+    uart_tx_program_init(KB_PIO, KB_SM, off, KB_UART_PIN, 115200);
 }
 
 typedef struct {

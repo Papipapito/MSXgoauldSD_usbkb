@@ -1,6 +1,10 @@
 # RP2040 firmware build directories (CMake/Ninja output)
 rp2040/build/
 rp2040/build_pico/
+rp2040/build_z/
+rp2040/build_p/
+rp2040/*_cfg.log
+test_hw/
 
 # Headless Gowin build helper + logs (the IDE build uses Z80_goauld.gprj)
 fpga/build_kbd.tcl
