@@ -994,44 +994,16 @@ end
     assign main_clk_falling = (turbo_safe == 1) ? clk_falling_5m37_54 : clk_falling_3m6_54;
 
     `ifdef ENABLE_WAIT
-        // ===== Per-M1 wait (real-MSX brake) synthesized for TURBO =====
-        // At 3.58 the 1-wait-per-M1 brake arrives from the real MSX board via
-        // bus_wait_n. In turbo the CPU free-runs at 5.37 and bus_wait_n is
-        // bypassed (cpu_wait_n |= config_enable_turbo), so WITHOUT this the
-        // 5.4 MHz clock benches ~6.17 instead of 5.37. Mask exactly one CPU-clock
-        // period (one main_clk_enable + one main_clk_falling of the ACTIVE muxed
-        // cadence) per M1 opcode fetch = 1 inserted wait-state. Armed ONLY when
-        // turbo_safe=1, so 3.58 mode (bus-provided wait) is untouched. RFSH is
-        // T3/T4 with M1_n already high, so refresh is not slowed. (Ported from
-        // MSXnano v1.9; watches the CPU's M1_n output bus_m1_n.)
-        reg wait_m1 = 1'b1;
-        reg bus_m1_n_prev_54 = 1'b1;
-        reg m1_active = 1'b0;
-        reg m1_masked_en = 1'b0;
-        reg m1_masked_fall = 1'b0;
-        always @ (posedge clk_54m) begin
-            if (~bus_reset_n) begin
-                wait_m1 <= 1'b1; bus_m1_n_prev_54 <= 1'b1;
-                m1_active <= 1'b0; m1_masked_en <= 1'b0; m1_masked_fall <= 1'b0;
-            end else begin
-                bus_m1_n_prev_54 <= bus_m1_n;
-                if (!m1_active) begin
-                    if (turbo_safe && bus_m1_n_prev_54 == 1'b1 && bus_m1_n == 1'b0) begin
-                        m1_active <= 1'b1; wait_m1 <= 1'b0;
-                        m1_masked_en <= 1'b0; m1_masked_fall <= 1'b0;
-                    end
-                end else begin
-                    if (main_clk_enable)  m1_masked_en   <= 1'b1;
-                    if (main_clk_falling) m1_masked_fall <= 1'b1;
-                    if ((m1_masked_en  || main_clk_enable) &&
-                        (m1_masked_fall || main_clk_falling)) begin
-                        wait_m1 <= 1'b1; m1_active <= 1'b0;
-                    end
-                end
-            end
-        end
-        assign cpu_clk_enable  = main_clk_enable  & wait_io & wait_addr & wait_m1;
-        assign cpu_clk_falling = main_clk_falling & wait_io & wait_addr & wait_m1;
+        // NOTE: a per-M1 wait to make turbo bench EXACTLY 5.37 (as in standalone
+        // MSXnano v1.9) was tried and REVERTED: the goauld drives the REAL MSX bus
+        // with a delicate stretch FSM (wait_addr + bus isolation), and an extra
+        // wait_m1 desyncs the enable/falling pairing -> erratic CPU (~180MHz),
+        // hang, corrupted VDP logo. Turbo here is a real ~5.4 MHz clock (≈ WSX);
+        // it benches ~6.17 only because we don't insert the M1 wait. Reaching an
+        // exact 5.37 bench needs reworking the bus-stretch timing (jabadiagm's
+        // domain -- see the Panasonic-turbo guide). Stable turbo restored below.
+        assign cpu_clk_enable  = main_clk_enable & wait_io & wait_addr;
+        assign cpu_clk_falling = main_clk_falling & wait_io & wait_addr;
     `else
         assign cpu_clk_enable  = main_clk_enable;
 		assign cpu_clk_falling = main_clk_falling;
