@@ -1173,6 +1173,7 @@ end
     localparam [7:0] FPGA_VERSION = 8'h13;   // v1.3 -- bump together with FW_VERSION (usbin.h) and the pack byte
 
     wire [7:0] kbd_fw_version;               // from kbd_uart_rx (0xC0 announce)
+    wire       cmd_turbo_toggle;             // v1.3: F11 live turbo toggle pulse (cmd 0x04)
 
     // OUT 0x2F latches the read-index for 0x2E.
     reg [1:0] ver_index;
@@ -1426,7 +1427,8 @@ end
         .fw_version          (kbd_fw_version),
         .cmd_scanline_toggle (),
         .cmd_reset_pulse     (),
-        .cmd_osd_toggle      ()
+        .cmd_osd_toggle      (),
+        .cmd_turbo_toggle    (cmd_turbo_toggle)
     );
 
     //rtc
@@ -2087,6 +2089,9 @@ memory_ctrl mem1 (
         end
         if (pana_turbo_update == 1) begin
             config2_ff[4] <= pana_turbo_bit;   // v1.3 Panasonic software turbo control
+        end
+        if (cmd_turbo_toggle == 1) begin
+            config2_ff[4] <= ~config2_ff[4];   // v1.3 F11 live turbo toggle (kbd cmd 0x04)
         end
         if (ocm_update == 1) begin
             config1_ff[7:6] <= 2'b10;
