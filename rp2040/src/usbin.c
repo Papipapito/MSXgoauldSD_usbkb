@@ -246,6 +246,44 @@ struct {
   hid_report_info_t report_info[MAX_REPORT];
 } hid_info[CFG_TUH_HID];
 
+// hid_info[] is a shared pool keyed by (dev_addr, instance). TinyUSB numbers
+// `instance` PER DEVICE (0-based), so a USB keyboard and a USB joystick are two
+// SEPARATE devices that BOTH enumerate as instance 0. The original code indexed
+// hid_info[instance] directly, so the second device clobbered the first's parsed
+// report descriptor in hid_info[0] -- exactly why keyboard+joystick together
+// broke (each then read the other's descriptor and did nothing). We map every
+// (dev_addr, instance) to its own slot instead. dev_addr 0 = free slot (real USB
+// devices are addr >= 1). NOTE: XInput pads never hit this table (separate
+// driver), which is why an Xbox pad + keyboard used to coexist fine.
+static struct { u8 dev_addr; u8 instance; } hid_slot_key[CFG_TUH_HID];
+
+// Find the hid_info[] slot for (dev_addr, instance). With alloc=true, claims a
+// free slot if none exists yet. Returns 0..CFG_TUH_HID-1, or 0xFF if full/absent.
+static u8 hid_slot_get(u8 dev_addr, u8 instance, bool alloc) {
+  for(u8 i = 0; i < CFG_TUH_HID; i++)
+    if(hid_slot_key[i].dev_addr == dev_addr && hid_slot_key[i].instance == instance &&
+       hid_slot_key[i].dev_addr != 0)
+      return i;
+  if(!alloc) return 0xFF;
+  for(u8 i = 0; i < CFG_TUH_HID; i++)
+    if(hid_slot_key[i].dev_addr == 0) {
+      hid_slot_key[i].dev_addr = dev_addr;
+      hid_slot_key[i].instance = instance;
+      return i;
+    }
+  return 0xFF;
+}
+
+// Release the slot held by (dev_addr, instance) on unmount so it can be reused.
+static void hid_slot_free(u8 dev_addr, u8 instance) {
+  for(u8 i = 0; i < CFG_TUH_HID; i++)
+    if(hid_slot_key[i].dev_addr == dev_addr && hid_slot_key[i].instance == instance) {
+      hid_slot_key[i].dev_addr = 0;
+      hid_slot_key[i].instance = 0;
+      return;
+    }
+}
+
 ms_items_t ms_items;
 
 struct {
@@ -626,16 +664,18 @@ void kb_report_receive(uint8_t modifiers, uint8_t const* report, u16 len) {
 //  * If the pad exposes neither X/Y nor a hat we still process buttons; a pad
 //    with no usable controls simply yields byte 0 (idle).
 void gamepad_report_receive(uint8_t dev_addr, uint8_t instance, uint8_t const* report, u16 len) {
-  hid_report_info_t* rpt_info_arr = hid_info[instance].report_info;
+  u8 slot = hid_slot_get(dev_addr, instance, false);
+  if(slot == 0xFF) return;
+  hid_report_info_t* rpt_info_arr = hid_info[slot].report_info;
   hid_report_info_t* rpt_info = NULL;
 
   // Resolve the collection for this report exactly like the keyboard path:
   // single report w/ id 0 -> first collection; otherwise match the report-id.
-  if(hid_info[instance].report_count == 1 && rpt_info_arr[0].report_id == 0) {
+  if(hid_info[slot].report_count == 1 && rpt_info_arr[0].report_id == 0) {
     rpt_info = &rpt_info_arr[0];
   } else {
     uint8_t const rpt_id = report[0];
-    for(uint8_t i = 0; i < hid_info[instance].report_count; i++) {
+    for(uint8_t i = 0; i < hid_info[slot].report_count; i++) {
       if(rpt_id == rpt_info_arr[i].report_id) { rpt_info = &rpt_info_arr[i]; break; }
     }
     report++;
@@ -794,7 +834,11 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 	char* hidprotostr = "none";
 	if(hid_if_proto == HID_ITF_PROTOCOL_KEYBOARD) hidprotostr = "keyboard";
 	if(hid_if_proto == HID_ITF_PROTOCOL_MOUSE) hidprotostr = "mouse";
-	hid_info[instance].report_count = hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
+	// Claim this (dev_addr, instance)'s own hid_info[] slot so a second device
+	// (e.g. joystick alongside the keyboard) can't clobber the first's descriptor.
+	u8 slot = hid_slot_get(dev_addr, instance, true);
+	if(slot == 0xFF) return;   // hid_info pool full (>16 interfaces): ignore extra
+	hid_info[slot].report_count = hid_parse_report_descriptor(hid_info[slot].report_info, MAX_REPORT, desc_report, desc_len);
 	if(!tuh_hid_receive_report(dev_addr, instance)) {
 	} else {
 		if(hid_if_proto == HID_ITF_PROTOCOL_KEYBOARD) {
@@ -815,10 +859,10 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 			// Generic HID: detect a gamepad/joystick by its parsed top-level
 			// collection (Generic Desktop / Game Pad 0x05 or Joystick 0x04).
 			// Such devices enumerate with interface protocol NONE, so we key off
-			// the report descriptor already parsed into hid_info[instance].
+			// the report descriptor already parsed into hid_info[slot].
 			bool is_pad = false;
-			for(uint8_t r = 0; r < hid_info[instance].report_count; r++) {
-				if(is_gamepad_usage(&hid_info[instance].report_info[r])) { is_pad = true; break; }
+			for(uint8_t r = 0; r < hid_info[slot].report_count; r++) {
+				if(is_gamepad_usage(&hid_info[slot].report_info[r])) { is_pad = true; break; }
 			}
 			if(is_pad) {
 				for(uint8_t i = 0; i < 8; i++) {
@@ -838,6 +882,8 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
 	isMounted = 0; board_led_write(0);
+	hid_slot_free(dev_addr, instance);   // release this device's hid_info[] slot
+
 	for(uint8_t i = 0; i < 8; i++) {
 		if(keyboards[i].dev_addr == dev_addr && keyboards[i].instance == instance) {
 			keyboards[i].dev_addr = 0;
@@ -878,14 +924,16 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 		return;
 	}
 
-	hid_report_info_t* rpt_info_arr = hid_info[instance].report_info;
+	u8 slot = hid_slot_get(dev_addr, instance, false);
+	if(slot == 0xFF) return;
+	hid_report_info_t* rpt_info_arr = hid_info[slot].report_info;
 	hid_report_info_t* rpt_info = NULL;
 
-	if(hid_info[instance].report_count == 1 && rpt_info_arr[0].report_id == 0) {
+	if(hid_info[slot].report_count == 1 && rpt_info_arr[0].report_id == 0) {
 		rpt_info = &rpt_info_arr[0];
 	} else {
 		uint8_t const rpt_id = report[0];
-		for(uint8_t i = 0; i < hid_info[instance].report_count; i++) {
+		for(uint8_t i = 0; i < hid_info[slot].report_count; i++) {
 		if(rpt_id == rpt_info_arr[i].report_id) {
 			rpt_info = &rpt_info_arr[i];
 			break;
