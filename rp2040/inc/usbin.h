@@ -19,7 +19,7 @@ typedef uint64_t u64;
 // FPGA's FPGA_VERSION (top.v) and the BIOS pack's version byte (LAST byte of
 // the 512KB pack). Announced to the FPGA as 0xC0 <FW_VERSION> with every
 // 250 ms resync; the FPGA exposes/verifies all three on I/O 0x2E/0x2F.
-#define FW_VERSION 0x12
+#define FW_VERSION 0x13
 
 #define MAX_REPORT 4
 #define MAX_REPORT_ITEMS 32

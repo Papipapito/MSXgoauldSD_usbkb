@@ -636,6 +636,7 @@ end
                 `endif
                 `ifdef ENABLE_CONFIG
                      ( config_req == 1 && config_ok == 1) ? config_dout :
+                     ( config_req == 1 && pana_sel == 1) ? pana_dout :
                      ( config_req == 1 && config_ok == 0) ? swio_dout :
                 `endif
                      ( kanji_driver_req == 1 ) ? ram_dout :
@@ -993,8 +994,44 @@ end
     assign main_clk_falling = (turbo_safe == 1) ? clk_falling_5m37_54 : clk_falling_3m6_54;
 
     `ifdef ENABLE_WAIT
-        assign cpu_clk_enable  = main_clk_enable & wait_io & wait_addr;
-        assign cpu_clk_falling = main_clk_falling & wait_io & wait_addr;
+        // ===== Per-M1 wait (real-MSX brake) synthesized for TURBO =====
+        // At 3.58 the 1-wait-per-M1 brake arrives from the real MSX board via
+        // bus_wait_n. In turbo the CPU free-runs at 5.37 and bus_wait_n is
+        // bypassed (cpu_wait_n |= config_enable_turbo), so WITHOUT this the
+        // 5.4 MHz clock benches ~6.17 instead of 5.37. Mask exactly one CPU-clock
+        // period (one main_clk_enable + one main_clk_falling of the ACTIVE muxed
+        // cadence) per M1 opcode fetch = 1 inserted wait-state. Armed ONLY when
+        // turbo_safe=1, so 3.58 mode (bus-provided wait) is untouched. RFSH is
+        // T3/T4 with M1_n already high, so refresh is not slowed. (Ported from
+        // MSXnano v1.9; watches the CPU's M1_n output bus_m1_n.)
+        reg wait_m1 = 1'b1;
+        reg bus_m1_n_prev_54 = 1'b1;
+        reg m1_active = 1'b0;
+        reg m1_masked_en = 1'b0;
+        reg m1_masked_fall = 1'b0;
+        always @ (posedge clk_54m) begin
+            if (~bus_reset_n) begin
+                wait_m1 <= 1'b1; bus_m1_n_prev_54 <= 1'b1;
+                m1_active <= 1'b0; m1_masked_en <= 1'b0; m1_masked_fall <= 1'b0;
+            end else begin
+                bus_m1_n_prev_54 <= bus_m1_n;
+                if (!m1_active) begin
+                    if (turbo_safe && bus_m1_n_prev_54 == 1'b1 && bus_m1_n == 1'b0) begin
+                        m1_active <= 1'b1; wait_m1 <= 1'b0;
+                        m1_masked_en <= 1'b0; m1_masked_fall <= 1'b0;
+                    end
+                end else begin
+                    if (main_clk_enable)  m1_masked_en   <= 1'b1;
+                    if (main_clk_falling) m1_masked_fall <= 1'b1;
+                    if ((m1_masked_en  || main_clk_enable) &&
+                        (m1_masked_fall || main_clk_falling)) begin
+                        wait_m1 <= 1'b1; m1_active <= 1'b0;
+                    end
+                end
+            end
+        end
+        assign cpu_clk_enable  = main_clk_enable  & wait_io & wait_addr & wait_m1;
+        assign cpu_clk_falling = main_clk_falling & wait_io & wait_addr & wait_m1;
     `else
         assign cpu_clk_enable  = main_clk_enable;
 		assign cpu_clk_falling = main_clk_falling;
@@ -1161,7 +1198,7 @@ end
     //--   Caveat: reads of 0x2E/0x2F shadow the S-1985 engine test registers
     //--   on machines that have one (writes still reach the real bus).
     //----------------------------------------------------------------
-    localparam [7:0] FPGA_VERSION = 8'h12;   // v1.2 -- bump together with FW_VERSION (usbin.h) and the pack byte
+    localparam [7:0] FPGA_VERSION = 8'h13;   // v1.3 -- bump together with FW_VERSION (usbin.h) and the pack byte
 
     wire [7:0] kbd_fw_version;               // from kbd_uart_rx (0xC0 announce)
 
@@ -1997,6 +2034,8 @@ memory_ctrl mem1 (
     reg config_flash_write_ff;
     reg config1_update;
     reg config2_update;
+    reg pana_turbo_update;   // v1.3: pulse when OUT &H41 (Panasonic dev 8) writes turbo
+    reg pana_turbo_bit;      // v1.3: turbo value from the Panasonic port (-> config2_ff[4])
     wire config_enable_scanlines;
     wire [1:0] config_mapper_slot;
     wire [1:0] config_megaram_slot;
@@ -2016,9 +2055,17 @@ memory_ctrl mem1 (
         config_flash_write_ff <= 0;
         config1_update <= 0;
         config2_update <= 0;
+        pana_turbo_update <= 0;
         if (cpu_clk_54 == 1 ) begin
             if (config0_req == 1 ) begin
                 config0_ff <= ~cpu_dout;
+            end
+            // v1.3 Panasonic OUT &H41 (device 8 selected): latch turbo into
+            // config2_ff[4] (same bit as the menu). bit0 active-low: 0 = turbo
+            // 5.37, 1 = 3.58.
+            if (pana41_wr == 1) begin
+                pana_turbo_update <= 1;
+                pana_turbo_bit    <= ~cpu_dout[0];
             end
 
             if (config1_req == 1 ) begin
@@ -2066,6 +2113,9 @@ memory_ctrl mem1 (
         if (config2_update == 1) begin
             config2_ff <= config2_temp_ff;
         end
+        if (pana_turbo_update == 1) begin
+            config2_ff[4] <= pana_turbo_bit;   // v1.3 Panasonic software turbo control
+        end
         if (ocm_update == 1) begin
             config1_ff[7:6] <= 2'b10;
             config1_ff[1] <= 1;
@@ -2092,6 +2142,19 @@ memory_ctrl mem1 (
     assign config_dout = ( bus_addr[3:0] == 4'h0 ) ? config0_ff :
                          ( bus_addr[3:0] == 4'h1 ) ? config1_ff :
                          ( bus_addr[3:0] == 4'h2 ) ? config2_ff : 8'hff;
+
+    // ===== v1.3 Panasonic switched-I/O device 8 (T9769 turbo, estilo WSX) =====
+    // Software compat: OUT &H40,8 selecciona el dispositivo 8 (config0_ff = ~8 =
+    // 0xF7); IN $40 devuelve 247 (deteccion). OUT &H41: solo bit0, activo-bajo
+    // (0 = turbo 5.37, 1 = 3.58). IN $41: 0xFA turbo / 0xFB normal. Convive con
+    // el dispositivo config del goauld (ID 0x48 -> config_ok=0xB7, excluyente) y
+    // con el swio OCM del rango $40-$4F (la prioridad de lectura de abajo gana).
+    // El turbo se latchea en config2_ff[4] (mismo bit que el menu) via pana_turbo_*.
+    wire pana_sel  = (config0_ff == 8'hf7) ? 1 : 0;
+    wire pana41_wr = (pana_sel == 1 && bus_addr[7:0] == 8'h41 &&
+                      bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0) ? 1 : 0;
+    wire [7:0] pana_dout = ( bus_addr[3:0] == 4'h0 ) ? config0_ff :
+                           ( bus_addr[3:0] == 4'h1 ) ? ( config_enable_turbo ? 8'hfa : 8'hfb ) : 8'hff;
 
 
     always @ (posedge clk_54m) begin
