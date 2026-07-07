@@ -771,14 +771,21 @@ usbh_class_driver_t const* usbh_app_driver_get_cb(uint8_t* driver_count) {
 
 void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_interface_t* xinput_itf) {
     (void)xinput_itf;
-    // Xbox 360 wired/wireless: pick an LED quadrant (harmless on other types).
-    tuh_xinput_set_led(dev_addr, instance, 0, true);
-    tuh_xinput_set_led(dev_addr, instance, 1, true);
-    tuh_xinput_set_rumble(dev_addr, instance, 0, 0, true);
+    // NOTE (RP2040 native host + hub): do NOT send LED/rumble here. Those are
+    // BLOCKING interrupt-OUT transfers; behind a hub they arm a second hub-split
+    // interrupt endpoint that the RP2040's single SIE cannot poll concurrently
+    // with the keyboard's interrupt-IN -> the pad's first report never arrives
+    // (not detected) AND the wedged OUT poisons the shared SIE, killing the
+    // keyboard too. Keeping the pad interrupt-IN-only (like a keyboard) matches
+    // the one topology the native host handles behind a hub. Rumble/LED are
+    // cosmetic and unused by the MSX joystick path, so we simply drop them.
+    //   tuh_xinput_set_led(dev_addr, instance, 0, true);   // removed (OUT xfer)
+    //   tuh_xinput_set_led(dev_addr, instance, 1, true);   // removed (OUT xfer)
+    //   tuh_xinput_set_rumble(dev_addr, instance, 0, 0, true); // removed (OUT xfer)
     g_joy_mounted = 1;                              // status LED -> yellow
     joy_set_state(0, 0);                            // clean baseline (no dir/fire)
     joy_base[0] = 0; af_arm[0] = 0;                 // clear autofire intent on connect
-    tuh_xinput_receive_report(dev_addr, instance);  // start polling
+    tuh_xinput_receive_report(dev_addr, instance);  // start polling (interrupt-IN only)
 }
 
 void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance) {
