@@ -2081,13 +2081,18 @@ memory_ctrl mem1 (
     always @ (posedge clk_54m) begin
         config_init_delay <= config_init;
         if (config_init == 1 ) begin
+            // v1.3: FORCE turbo (config2_ff[4]) OFF at boot -- the boot/menu ROM and
+            // the DOS/Nextor init are timing-sensitive and hang at turbo speed
+            // ("pantalla azul", menu unreachable); a persisted turbo would brick the
+            // boot until reflashing a turbo-off pack. The system always powers on at
+            // 3.58; enable turbo per-session with F11 / Panasonic $41 (works in DOS).
             if (s2 == 1) begin
                 config1_ff <= CONFIG1_DEFAULT;
-                config2_ff <= CONFIG2_DEFAULT;
+                config2_ff <= CONFIG2_DEFAULT & 8'hEF;   // clear bit4 (turbo)
             end
             else begin
                 config1_ff <= config_sig[2];
-                config2_ff <= config_sig[3];
+                config2_ff <= config_sig[3] & 8'hEF;     // clear bit4 (turbo)
             end
         end
         if (config1_update == 1) begin
