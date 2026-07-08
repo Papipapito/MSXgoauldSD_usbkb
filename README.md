@@ -13,7 +13,8 @@ Fork of **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD
 - **USB keyboard** alongside the physical MSX keyboard — **US / International** layout, non-blocking make/break, modifiers (Shift/Ctrl/Graph/Code).
 - **USB joystick / gamepad** merged with the real MSX joysticks — **generic HID *and* XInput (Xbox)** pads.
 - **One data wire**: RP2040 → FPGA over UART (Tang Nano pin 75). The joystick needs no extra pins (same link).
-- **WS2812 status LED** on the RP2040 (red / green / yellow / white).
+- **WS2812 status LED** on the RP2040 (red / green / yellow / white), plus an optional external 8-LED status panel.
+- **Turbo** — internal high-speed CPU, toggled from the boot menu, **F11**, or the Panasonic `$40/$41` I/O ports.
 - **WiFi (ESP-01S)** ready in the FPGA core (optional).
 - Real keyboard, joysticks, slots and cartridges are untouched.
 
@@ -25,12 +26,11 @@ The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bu
 |---|---|
 | `MSXgoauldSD_usbkb.fs` | FPGA bitstream (Tang Nano 20K, GW2AR-18) with the keyboard + joystick merge. |
 | `rp2040_keyboard.uf2` | RP2040 firmware — **Waveshare RP2040-Zero** (on-board WS2812 LED on GPIO16). |
-| `rp2040_keyboard_pico.uf2` | RP2040 firmware — **Raspberry Pi Pico** (mono LED on GPIO25). |
 
-> Both builds drive the optional external 8-LED WS2812 panel on **GP14** (see *Status LEDs*). They are the same firmware, built with `-DRP2040_ZERO=1/0`.
+> The release ships the **RP2040-Zero** firmware. A plain **Raspberry Pi Pico** build (mono LED on GPIO25) can be built from source with `-DRP2040_ZERO=0`. Both drive the optional external 8-LED WS2812 panel on **GP26** (see *Status LEDs*).
 
 ## Version guard (keep the three flashables in step)
-Since **v1.2**, the bitstream, the RP2040 firmware and the BIOS pack all carry the **same BCD version** (`0x12` = v1.2) and the **FPGA verifies it**:
+Since **v1.2**, the bitstream, the RP2040 firmware and the BIOS pack all carry the **same BCD version** (e.g. `0x13` = v1.3) and the **FPGA verifies it**:
 
 - **`.fs`** — `FPGA_VERSION` in [`fpga/top.v`](fpga/top.v).
 - **`.uf2`** — `FW_VERSION` in [`rp2040/inc/usbin.h`](rp2040/inc/usbin.h); the RP2040 announces it over the UART link (`0xC0 <ver>`, re-sent with every 250 ms resync — old bitstreams simply ignore it).
@@ -42,7 +42,7 @@ For scripted checks, the FPGA also exposes everything on I/O ports **0x2E/0x2F**
 
 | Access | Returns |
 |---|---|
-| `IN &H2F` | FPGA version (`&H12`) |
+| `IN &H2F` | FPGA version (e.g. `&H13`) |
 | `OUT &H2F,0` then `IN &H2E` | RP2040 firmware version (`0` = not announced / link down) |
 | `OUT &H2F,1` then `IN &H2E` | BIOS pack version byte (`&HFF` = pre-v1.2 pack) |
 | `OUT &H2F,2` then `IN &H2E` | **Verify status: `0` = everything matches**; bit0 = uf2 mismatch, bit1 = uf2 not announced, bit2 = pack mismatch, bit3 = pack has no version |
@@ -66,7 +66,7 @@ A single WS2812 showing one **priority** colour:
 | ⚪ White flash | Key press / joystick activity |
 
 ### Optional external 8-LED panel (on the case)
-An 8× WS2812 stick mounted on the case turns the status into a **panel where each LED is a different signal** (instead of one colour). Driven from **RP2040 GP14**; the on-board LED keeps working alongside it.
+An 8× WS2812 stick mounted on the case turns the status into a **panel where each LED is a different signal** (instead of one colour). Driven from **RP2040 GP26**; the on-board LED keeps working alongside it.
 
 ![WS2812-8 RGB strip](pics/ws2812_8_strip.jpg)
 
@@ -81,7 +81,7 @@ An 8× WS2812 stick mounted on the case turns the status into a **panel where ea
 
 **Wiring** — the strip is rated **4–7 VDC**:
 ```
-RP2040 GP14  ->  strip DIN    (3.3 V data, direct -- no level shifter)
+RP2040 GP26  ->  strip DIN    (3.3 V data, direct -- no level shifter)
 common GND   ->  strip GND
 MSX +5V --|>|-   strip 5V      one 1N4007 silicon diode -> ~4.3 V (inside the
                                4-7 V range). The strip's VIH (~0.7*Vcc) then sits
@@ -113,10 +113,26 @@ MSX +5V --|>|-   strip 5V      one 1N4007 silicon diode -> ~4.3 V (inside the
 **US / International** layout (matches the international MSX2+ BIOS). Letters, digits and arrows are 1:1 with the MSXnano translator; a few symbols depend on your board's BIOS. The MSX BIOS does autorepeat and the FPGA owns the matrix, so the RP2040 never blocks.
 
 ## USB joystick / gamepad
-Plug a **wired** USB pad into the RP2040 (use a USB hub if you also want the keyboard at the same time). Mapped to **MSX joystick port 1**: D-pad / hat / left stick → directions, **A / button 1 → fire 1 (trigger A)**, **B / button 2 → fire 2 (trigger B)**.
+Plug a **wired** USB pad into the RP2040 (use a **powered** USB hub if you also want the keyboard at the same time). Mapped to **MSX joystick port 1**: D-pad / hat / left stick → directions, **A / button 1 → fire 1 (trigger A)**, **B / button 2 → fire 2 (trigger B)**. The two spare buttons (3 / 4) act as **autofire** for fire 1 / fire 2.
 - **XInput** — Xbox 360 / One / Series and XInput-mode pads (via the bundled `tusb_xinput` driver). ✅ tested on hardware.
 - **Generic HID** — pads exposing standard X/Y axes, a hat and buttons (many retro / arcade / SNES-style USB pads).
+- **Keyboard + joystick at once** need a **powered** USB hub — the RP2040-Zero has a single USB port. Since v1.3 an XInput pad runs **input-only** (rumble / LED are disabled): its extra interrupt-OUT endpoint otherwise overwhelms the RP2040's native USB host behind a hub and stops both devices from working.
 - **Limitations:** wireless **2.4 GHz dongles** usually can't be enumerated by the RP2040's lightweight USB host (they signal late, after the pad pairs) → use a **wired** controller; some **DualShock 4 / PS-mode** pads use a report format the basic HID parser doesn't decode yet → use the pad in **XInput mode** if it has one.
+
+## Turbo (high-speed CPU)
+The core has an internal **high-speed CPU clock** — jabadiagm's ~6.75 MHz turbo, derived from the video clock so it stays stable at boot, in the menu and in MSX-DOS. Since **v1.3** there are **three ways** to toggle it, all acting on the same state:
+
+- **Boot menu** — the *Turbo* option (press **G** during the MSX logo).
+- **F11** — toggles turbo **live** at any moment, from the USB keyboard.
+- **Panasonic switched-I/O ports `$40/$41`** (device 8, WSX-style) so existing MSX turbo software works unchanged:
+  ```basic
+  OUT &H40,8 : PRINT INP(&H40)  ' select device 8; returns 247 (detection)
+  OUT &H41,0                    ' turbo ON   (bit0 active-low)
+  OUT &H41,1                    ' turbo OFF
+  ' INP(&H41) = 250 (&HFA) turbo / 251 (&HFB) normal
+  ```
+
+> Turbo runs the CPU faster than real-MSX timing; some timing-sensitive software may misbehave — use it for SD / MSX-DOS work and games that tolerate it.
 
 ## Wiring (one data wire + ground + 5 V)
 
@@ -126,19 +142,19 @@ Plug a **wired** USB pad into the RP2040 (use a USB hub if you also want the key
 
 | Tang Nano 20K pin | Used for | Direction |
 |---|---|---|
-| 🟢 **75** | RP2040 keyboard **+ joystick** link | RP2040 GPIO0 (TX) → FPGA |
+| 🟢 **75** | RP2040 keyboard **+ joystick** link | RP2040 GP15 (PIO-UART TX) → FPGA |
 | 🔵 **77** | WiFi — ESP-01S (optional) | ESP TX → FPGA |
 | 🔵 **79** | WiFi — ESP-01S (optional) | FPGA → ESP RX |
 | ⚫ **GND** | Common ground (required) | — |
 | 🔴 **5V** | Power | MSX +5 V → RP2040 / ESP |
 
 ```
-RP2040 GPIO0 (UART0 TX)  ->  Tang Nano 20K pin 75
-RP2040 GND               ->  Tang Nano 20K GND   (common ground, required)
-RP2040 VBUS / 5V         ->  MSX +5V
-USB keyboard / gamepad   ->  RP2040 USB host port (use a hub for both at once)
+RP2040 GP15 (PIO-UART TX) ->  Tang Nano 20K pin 75
+RP2040 GND                ->  Tang Nano 20K GND   (common ground, required)
+RP2040 VBUS / 5V          ->  MSX +5V
+USB keyboard / gamepad    ->  RP2040 USB host port (use a powered hub for both at once)
 ```
-UART **115200 8N1**, data flows RP2040 → FPGA only; 3.3 V LVCMOS both ends (no level shifter).
+UART **115200 8N1**, data flows RP2040 → FPGA only; 3.3 V LVCMOS both ends (no level shifter). Since v1.3 the link is driven from **GP15** via a PIO UART (the LED strip uses GP26, GP27 is free) — the RP2040's hardware UARTs don't reach GP15.
 
 ### WiFi (ESP-01S, optional)
 The core ships with the MSX UNAPI WiFi driver. Wire an **ESP-01S**: TX → **pin 77**, RX → **pin 79**, VCC + CH_PD → **3.3 V**, GND → GND. Firmware: the **OCM** build of **[ducasp / MSX-Development ESPFW1.4](https://github.com/ducasp/MSX-Development/releases/tag/ESPFW1.4)**; baud **859372**, I/O ports **0x06 / 0x07**. It coexists with the RP2040 (pin 75).
