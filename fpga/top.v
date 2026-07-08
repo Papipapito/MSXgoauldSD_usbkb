@@ -783,7 +783,14 @@ end
         else begin
             case (state_wait)
                 WAIT_IDLE: begin
-                    if ( config_enable_wait == 1 && ( bus_iorq_n == 0 || bus_mreq_n == 0 ) && (bus_rd_n == 0 || bus_wr_n == 0) ) begin
+                    // v1.3: (wait & ~turbo) -> the wait FSM is FORCED IDLE in turbo.
+                    // The goauld wait_io/wait_addr timing was tuned for jabadiagm's
+                    // 6.75MHz turbo; with our 5.4MHz Panasonic cadence, turbo+wait
+                    // ("modo compatible" ON + turbo) desyncs -> erratic speeds/hang.
+                    // "compatible OFF + turbo" (wait idle) is stable ~5.4MHz (bench
+                    // 6.17), so make that the always-behaviour in turbo. 3.58 keeps
+                    // the real-MSX waits unchanged.
+                    if ( (config_enable_wait & ~config_enable_turbo) == 1 && ( bus_iorq_n == 0 || bus_mreq_n == 0 ) && (bus_rd_n == 0 || bus_wr_n == 0) ) begin
                         if (config_enable_turbo == 0) begin 
                             if (bus_rd_n == 0) begin
                                 wait_cycles <= 7'd1;
@@ -847,7 +854,9 @@ end
         else begin
             case (state_wait_addr)
                 WAIT_IDLE: begin
-                    if ( config_enable_turbo == 1 && config_enable_wait == 1 && update_addr == 1 ) begin
+                    // v1.3: (wait & ~turbo) is always 0 while turbo=1, so the addr-latch
+                    // wait is disabled in turbo too (part of the turbo+wait fix above).
+                    if ( config_enable_turbo == 1 && (config_enable_wait & ~config_enable_turbo) == 1 && update_addr == 1 ) begin
                         wait_cycles_addr <= 2;
                         wait_addr_ff <= 0;
                         state_wait_addr <= WAIT_STATE1;
