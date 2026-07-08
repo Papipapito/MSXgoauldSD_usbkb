@@ -783,14 +783,7 @@ end
         else begin
             case (state_wait)
                 WAIT_IDLE: begin
-                    // v1.3: (wait & ~turbo) -> the wait FSM is FORCED IDLE in turbo.
-                    // The goauld wait_io/wait_addr timing was tuned for jabadiagm's
-                    // 6.75MHz turbo; with our 5.4MHz Panasonic cadence, turbo+wait
-                    // ("modo compatible" ON + turbo) desyncs -> erratic speeds/hang.
-                    // "compatible OFF + turbo" (wait idle) is stable ~5.4MHz (bench
-                    // 6.17), so make that the always-behaviour in turbo. 3.58 keeps
-                    // the real-MSX waits unchanged.
-                    if ( (config_enable_wait & ~config_enable_turbo) == 1 && ( bus_iorq_n == 0 || bus_mreq_n == 0 ) && (bus_rd_n == 0 || bus_wr_n == 0) ) begin
+                    if ( config_enable_wait == 1 && ( bus_iorq_n == 0 || bus_mreq_n == 0 ) && (bus_rd_n == 0 || bus_wr_n == 0) ) begin
                         if (config_enable_turbo == 0) begin 
                             if (bus_rd_n == 0) begin
                                 wait_cycles <= 7'd1;
@@ -854,9 +847,7 @@ end
         else begin
             case (state_wait_addr)
                 WAIT_IDLE: begin
-                    // v1.3: (wait & ~turbo) is always 0 while turbo=1, so the addr-latch
-                    // wait is disabled in turbo too (part of the turbo+wait fix above).
-                    if ( config_enable_turbo == 1 && (config_enable_wait & ~config_enable_turbo) == 1 && update_addr == 1 ) begin
+                    if ( config_enable_turbo == 1 && config_enable_wait == 1 && update_addr == 1 ) begin
                         wait_cycles_addr <= 2;
                         wait_addr_ff <= 0;
                         state_wait_addr <= WAIT_STATE1;
@@ -998,9 +989,17 @@ end
     wire clk_falling_5m37_54 = clk_falling_5m4_raw & ~pana_skip_pend;
 
     // Turbo mux: 5.37 WSX cadence when turbo, untouched 3.6 MHz otherwise.
-    assign cpu_clk_54     = (turbo_safe == 1) ? clk_5m37_54 : bus_clk_3m6_54;
-    assign main_clk_enable  = (turbo_safe == 1) ? clk_enable_5m37_54 : clk_enable_3m6_54;
-    assign main_clk_falling = (turbo_safe == 1) ? clk_falling_5m37_54 : clk_falling_3m6_54;
+    // v1.3: back to jabadiagm's 0.93 VIDEO-DERIVED 6.75MHz turbo (clk_6m75_*).
+    // Our free-running 5.37 Panasonic cadence (/20 of clk_108m) was ASYNC to the
+    // VDP dot clock, so VDP-heavy boot/menu code hung at turbo (blue screen). The
+    // 6.75 cadence is locked to VideoDHClk/VideoDLClk (13.5MHz/2) -> coherent with
+    // the VDP -> stable at boot, in the menu and in DOS, and turbo+wait works (the
+    // wait FSMs were tuned for it). Turbo control (menu G / F11 / Panasonic $41) all
+    // drive config2_ff[4] -> config_enable_turbo -> turbo_safe. (The 5.37 cadence
+    // block above is now dead and trimmed by synthesis.)
+    assign cpu_clk_54     = (turbo_safe == 1) ? clk_6m75_54 : bus_clk_3m6_54;
+    assign main_clk_enable  = (turbo_safe == 1) ? clk_enable_6m75_54 : clk_enable_3m6_54;
+    assign main_clk_falling = (turbo_safe == 1) ? clk_falling_6m75_54 : clk_falling_3m6_54;
 
     `ifdef ENABLE_WAIT
         // NOTE: a per-M1 wait to make turbo bench EXACTLY 5.37 (as in standalone
@@ -2081,18 +2080,13 @@ memory_ctrl mem1 (
     always @ (posedge clk_54m) begin
         config_init_delay <= config_init;
         if (config_init == 1 ) begin
-            // v1.3: FORCE turbo (config2_ff[4]) OFF at boot -- the boot/menu ROM and
-            // the DOS/Nextor init are timing-sensitive and hang at turbo speed
-            // ("pantalla azul", menu unreachable); a persisted turbo would brick the
-            // boot until reflashing a turbo-off pack. The system always powers on at
-            // 3.58; enable turbo per-session with F11 / Panasonic $41 (works in DOS).
             if (s2 == 1) begin
                 config1_ff <= CONFIG1_DEFAULT;
-                config2_ff <= CONFIG2_DEFAULT & 8'hEF;   // clear bit4 (turbo)
+                config2_ff <= CONFIG2_DEFAULT;
             end
             else begin
                 config1_ff <= config_sig[2];
-                config2_ff <= config_sig[3] & 8'hEF;     // clear bit4 (turbo)
+                config2_ff <= config_sig[3];
             end
         end
         if (config1_update == 1) begin
