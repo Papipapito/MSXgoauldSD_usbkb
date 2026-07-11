@@ -109,6 +109,14 @@
 	rrca
 	rrca
 	ld   (var_turbo), a
+	ld   a, b
+	and  #20						; Bit 5: sprite limit 8/line (screen 2 anti-flicker)
+	rrca
+	rrca
+	rrca
+	rrca
+	rrca
+	ld   (var_sprlim), a
 
 	ei
 
@@ -152,6 +160,11 @@ ONOFF_Y = ONOFF_Y + 2
 
 	ld   hl,#2b00 + ONOFF_Y			; Print Turbo
 	ld   a,(var_turbo)
+	call print_on_off
+ONOFF_Y = ONOFF_Y + 2
+
+	ld   hl,#2b00 + ONOFF_Y			; Print 8 Sprites/Line
+	ld   a,(var_sprlim)
 	call print_on_off
 ONOFF_Y = ONOFF_Y + 2
 
@@ -356,6 +369,13 @@ selected_turbo:
 	ld   (hl), a
 	ret
 
+selected_sprlim:
+	ld   hl, var_sprlim
+	ld   a, (hl)
+	xor  1
+	ld   (hl), a
+	ret
+
 selected_saveReset:
 	pop  hl							; Remove ret to bucle
 	call config_var2byte
@@ -423,6 +443,14 @@ config_var2byte:
 	or   b
 	ld   b, a
 	ld   a, (var_turbo)			; #42 Bit 4: turbo
+	rlca
+	rlca
+	rlca
+	rlca
+	or   b
+	ld   b, a
+	ld   a, (var_sprlim)			; #42 Bit 5: sprite limit 8/line
+	rlca
 	rlca
 	rlca
 	rlca
@@ -510,6 +538,8 @@ slowDeviceStr:
 	.db "Compatible Mode",0
 turboStr:
 	.db "Turbo",0
+spriteLimitStr:
+	.db "8 Sprites/Line",0
 saveExitStr:
 	.db "Save & Exit",0
 saveResetStr:
@@ -596,16 +626,25 @@ POS_Y = POS_Y + 2
 struct_Turbo:
 	.db 21, POS_Y+1
 	.dw turboStr
-	.dw struct_SlowDevice, struct_SaveExit, struct_Turbo
+	.dw struct_SlowDevice, struct_SpriteLimit, struct_Turbo
 	.dw #0800 + POS_Y*10 + 2
 	.db 4
 	.dw selected_turbo
 POS_Y = POS_Y + 2
 
+struct_SpriteLimit:
+	.db 21, POS_Y+1
+	.dw spriteLimitStr
+	.dw struct_Turbo, struct_SaveExit, struct_SpriteLimit
+	.dw #0800 + POS_Y*10 + 2
+	.db 4
+	.dw selected_sprlim
+POS_Y = POS_Y + 2
+
 struct_SaveExit:
 	.db 21, POS_Y+1
 	.dw saveExitStr
-	.dw struct_Turbo, struct_SaveReset, struct_SaveExit
+	.dw struct_SpriteLimit, struct_SaveReset, struct_SaveExit
 	.dw #0800 + POS_Y*10 + 2
 	.db 4
 	.dw selected_saveExit
@@ -663,6 +702,7 @@ structs_end:
 	var_mapslt: ds 1
 	var_slowdv: ds 1
 	var_turbo: ds 1
+	var_sprlim: ds 1
 	var_megslt: ds 1
 	var_sdcslt: ds 1
 

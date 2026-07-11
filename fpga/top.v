@@ -1501,7 +1501,7 @@ end
         .adc_mosi (),
         .adc_miso (0),
 
-        .maxspr_n    (1),
+        .maxspr_n    (~config_enable_8sprites),   // config2_ff[5]: 0 => 4 sprites/line (std), 1 => 8/line
     `ifdef ENABLE_SCAN_LINES
         .scanlin_n   (~config_enable_scanlines),
     `else
@@ -2012,6 +2012,7 @@ memory_ctrl mem1 (
     reg config_enable_sdcard;
     wire config_enable_wait;
     wire config_enable_turbo;
+    wire config_enable_8sprites;   // config2_ff[5]: 8 sprites/line (screen 2 anti-flicker)
     reg config_reset_ff;
     reg config_flash_write_ff;
     reg config1_update;
@@ -2123,6 +2124,7 @@ memory_ctrl mem1 (
     //assign config_keyboard = config2_ff[4:3];
     assign config_enable_turbo = config2_ff[4];
     assign config_enable_wait = config2_ff[3];
+    assign config_enable_8sprites = config2_ff[5];   // 8 sprites/line (screen 2 anti-flicker); default off (CONFIG2_DEFAULT bit5=0)
     assign config_req = (bus_addr[7:4] == 4'h4 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0)? 1:0;
     assign config_dout = ( bus_addr[3:0] == 4'h0 ) ? config0_ff :
                          ( bus_addr[3:0] == 4'h1 ) ? config1_ff :
@@ -2175,6 +2177,7 @@ memory_ctrl mem1 (
     wire [1:0] config_sdcard_slot;
     wire config_reset;
     wire config_enable_wait;
+    wire config_enable_8sprites;
     assign config_enable_mapper3 = 1;
     assign config_enable_mapper12 = 0;
     assign config_enable_megaram = 1;
@@ -2189,6 +2192,7 @@ memory_ctrl mem1 (
     assign config_reset = 0;
     assign config_enable_wait = 0;
     assign config_enable_turbo = 0;
+    assign config_enable_8sprites = 0;
 
 `endif
 
