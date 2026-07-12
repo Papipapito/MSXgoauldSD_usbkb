@@ -33,9 +33,9 @@ The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bu
 
 *Close-up: the **Tang Nano 20K** (HDMI out, USB-C) and the **ESP-01S WiFi** module, connected to the Z80 socket by the ribbon cable.*
 
-![The HDMI connector and power / ribbon-cable routing inside the case](pics/goauld_usbkb_hdmi_mount.jpg)
+![The RP2040-Zero and the back of the case's front LED panel](pics/goauld_usbkb_rp2040_leds.jpg)
 
-*The HDMI output and the power / ribbon-cable routing inside the machine.*
+*The **RP2040-Zero** (running the USB keyboard/joystick firmware) and the rear of the case's **front LED status panel** (the WS2812 strip).*
 
 ## Binaries (see [Releases](../../releases) or [`production/`](production/))
 | File | What it is |
