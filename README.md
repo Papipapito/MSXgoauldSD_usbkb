@@ -2,6 +2,10 @@
 
 Fork of **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD_tn20k)** — the FPGA "Z80-socket replacement" that turns a real MSX into an MSX2+ on a Tang Nano 20K — adding a **USB keyboard and a USB joystick/gamepad** that work **alongside** the MSX's own keyboard and joysticks, through a **Raspberry Pi Pico / RP2040** over a single UART wire. Everything the MSX already does (real keyboard, joysticks, cartridges, SD, WiFi) keeps working; the USB devices are *merged in*, not a replacement.
 
+![The Goa'uld board (Tang Nano 20K) installed in a real MSX, with the ESP-01S WiFi module](pics/goauld_usbkb_in_msx.jpg)
+
+*The Goa'uld board (Sipeed **Tang Nano 20K**) sitting in a real MSX's Z80 socket, with the **ESP-01S WiFi** module and HDMI output. The USB keyboard and joystick reach the FPGA over the single wire to Tang pin 75 — the MSX's own keyboard and joysticks keep working at the same time.*
+
 **Derived from the great work of:**
 - **jabadiagm** — MSX Goa'uld: the FPGA MSX2+ core and board. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
 - **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: the RP2040 USB-host firmware (based on the No0ne / pdaxrom HID parser). <https://github.com/Chandler-Kluser/msx-goauld-ga>
@@ -20,6 +24,14 @@ Fork of **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD
 
 ## How it works
 The Goa'uld board replaces the MSX's Z80, so the FPGA sits on the real system bus. It does **not** re-implement the keyboard/joystick ports — the real motherboard scans them and the FPGA just *watches* the bus. The RP2040 runs a TinyUSB **host**, reads the USB keyboard + gamepad, and sends keyboard **make/break** events (plus a periodic full-matrix resync) and a **joystick byte** (`0xB0 <port> <state>`) over UART. Inside the FPGA these are **AND-merged** (active-low) into the MSX keyboard-matrix read and the PSG joystick read, so the **USB and the real devices coexist** — use either, both reach the MSX.
+
+![Close-up of the Tang Nano 20K with HDMI output and the ESP-01S WiFi module](pics/goauld_usbkb_tang_hdmi.jpg)
+
+*Close-up: the **Tang Nano 20K** (HDMI out, USB-C) and the **ESP-01S WiFi** module, connected to the Z80 socket by the ribbon cable.*
+
+![The HDMI connector and power / ribbon-cable routing inside the case](pics/goauld_usbkb_hdmi_mount.jpg)
+
+*The HDMI output and the power / ribbon-cable routing inside the machine.*
 
 ## Binaries (see [Releases](../../releases) or [`production/`](production/))
 | File | What it is |
