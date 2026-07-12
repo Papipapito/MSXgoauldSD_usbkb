@@ -6,6 +6,10 @@ Fork of **[jabadiagm/MSXgoauldSD_tn20k](https://github.com/jabadiagm/MSXgoauldSD
 
 *The Goa'uld board (Sipeed **Tang Nano 20K**) sitting in a real MSX's Z80 socket, with the **ESP-01S WiFi** module and HDMI output. The USB keyboard and joystick reach the FPGA over the single wire to Tang pin 75 — the MSX's own keyboard and joysticks keep working at the same time.*
 
+▶️ **See it running on a real MSX:**
+
+[![MSXgoauldSD_usbkb — USB keyboard on a real MSX (video)](https://img.youtube.com/vi/J3gg5tnaye4/hqdefault.jpg)](https://youtube.com/shorts/J3gg5tnaye4)
+
 **Derived from the great work of:**
 - **jabadiagm** — MSX Goa'uld: the FPGA MSX2+ core and board. <https://github.com/jabadiagm/MSXgoauldSD_tn20k>
 - **Chandler-Klüser** — MSX Goa'uld *Guardian Angel*: the RP2040 USB-host firmware (based on the No0ne / pdaxrom HID parser). <https://github.com/Chandler-Kluser/msx-goauld-ga>
