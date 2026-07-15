@@ -130,18 +130,23 @@ static const uint8_t keycode_to_goauld[256] = {
     [0x3D] = 0x80 | (0 << 4) | 7, // F4 -> row7 bit0 (0x87)
     [0x3E] = 0x80 | (1 << 4) | 7, // F5 -> row7 bit1 (0x97)
 
-    // ---- F6, F7 -> MSX STOP / GRAPH matrix cells (preserves original
-    //       firmware behaviour; the FPGA has these cells via ScrollLock/End
-    //       and the GRAPH modifier, so driving them from F6/F7 is harmless). ----
-    [0x3F] = 0x80 | (4 << 4) | 7, // F6 -> row7 bit4 (0xC7) MSX STOP
-    [0x40] = 0x80 | (2 << 4) | 6, // F7 -> row6 bit2 (0xA6) MSX GRAPH
+    // ---- F6..F10 -> MSX F6..F10 = Shift + F1..F5 ----
+    //   The MSX only has 5 function keys; F6..F10 are Shift+F1..F5. These map to
+    //   the SAME cells as F1..F5, and usbin.c (kb_report_receive) injects a
+    //   virtual Shift while any of them is held. STOP and GRAPH (the old F6/F7
+    //   targets) stay reachable via ScrollLock (0x47) and Left-Alt, so nothing is
+    //   lost. Edge case: holding a plain Fn AND its shifted twin (e.g. F1+F6) at
+    //   once shares a cell -- unrealistic (they are one physical key on a real MSX).
+    [0x3F] = 0x80 | (5 << 4) | 6, // F6  -> F1 cell 0xD6  (+Shift = MSX F6)
+    [0x40] = 0x80 | (6 << 4) | 6, // F7  -> F2 cell 0xE6  (+Shift = MSX F7)
+    [0x41] = 0x80 | (7 << 4) | 6, // F8  -> F3 cell 0xF6  (+Shift = MSX F8)
+    [0x42] = 0x80 | (0 << 4) | 7, // F9  -> F4 cell 0x87  (+Shift = MSX F9)
+    [0x43] = 0x80 | (1 << 4) | 7, // F10 -> F5 cell 0x97  (+Shift = MSX F10)
 
-    // ---- F8..F12 -> COMMAND opcodes (bit7==0), sent raw on the press edge. ----
-    //   0x01 scanline / 0x03 OSD are decoded but unconnected in the FPGA (no-op).
-    //   0x04 = TURBO toggle (F11) IS wired: flips config2_ff[4] live (v1.3).
-    [0x41] = 0x01, // F8  -> command 0x01 (scanline, no-op)
-    [0x42] = 0x03, // F9  -> command 0x03 (OSD, no-op)
-    [0x43] = 0x03, // F10 -> command 0x03 (OSD, no-op)
+    // ---- F11 / F12 -> COMMAND opcodes (bit7==0), sent raw on the press edge. ----
+    //   The MSX has no F11/F12, so they are free for our own commands.
+    //   0x04 = TURBO toggle (F11) IS wired in the FPGA: flips config2_ff[4] live.
+    //   0x02 = reset command (F12): decoded but unconnected in the FPGA (no-op).
     [0x44] = 0x04, // F11 -> command 0x04 (TURBO toggle, live)
     [0x45] = 0x02, // F12 -> command 0x02 (reset, no-op)
 };

@@ -593,6 +593,15 @@ static inline uint8_t map_cell(uint8_t k) {
 void kb_report_receive(uint8_t modifiers, uint8_t const* report, u16 len) {
 	if(len > sizeof(prev_keys)) len = sizeof(prev_keys);
 
+	// ---- 0. USB F6..F10 = MSX F6..F10 = Shift + F1..F5 ----
+	// The MSX has only 5 function keys; F6..F10 are Shift+F1..F5. USB F6..F10
+	// (HID 0x3F..0x43) map to the F1..F5 matrix cells (keymaps.h); here we OR in
+	// a virtual Left-Shift while any of them is held so the MSX registers the
+	// shifted key. Folds together with a real Shift (both become DRV_SHIFT).
+	for(uint8_t i = 0; i < len; i++) {
+		if(report[i] >= 0x3F && report[i] <= 0x43) { modifiers |= 0x02; break; }
+	}
+
 	// ---- 1. Modifiers: diff the 4 DERIVED logical bits, not raw HID bits ----
 	uint8_t derived = derive_modifiers(modifiers);
 	if(derived != prev_derived) {
