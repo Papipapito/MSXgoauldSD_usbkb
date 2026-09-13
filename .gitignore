@@ -1,0 +1,10 @@
+
+# --- usbkb fork: RP2040 firmware build dirs + local HW test bundle ---
+rp2040/build/
+rp2040/build_pico/
+rp2040/build_z/
+rp2040/build_p/
+rp2040/*_cfg.log
+test_hw/
+production/goauld_rom_int.bin
+production/*.elf

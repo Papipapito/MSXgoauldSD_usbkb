@@ -11,6 +11,7 @@
 //`define SWAP23
 `define ENABLE_WIFI
 //`define ENABLE_CUSTOM_ROM //16kb slot 0-3, bank 1
+`define ENABLE_USB_KBD //USB keyboard + joystick from an RP2040 over one UART wire (pin 75), AND-merged with the real ones
 
 module top
 #(
@@ -69,6 +70,11 @@ module top
 
     //usb uart
     output wire usb_uart_tx,
+
+`ifdef ENABLE_USB_KBD
+    // USB keyboard/joystick virtual-matrix UART RX (RP2040 GP15 PIO-UART TX -> pin 75)
+    input wire kbd_uart_rx_pin,
+`endif
 
     // Magic ports for SDRAM to be inferred
     output wire O_sdram_clk,
@@ -639,6 +645,13 @@ end
                      ( ppi_req_r == 1 ) ? ppi_port_a :
                      ( slot0_req_r == 1 ) ? 8'hff :
                      ( slotx_req_r == 1 ) ? 8'hff :
+                `ifdef ENABLE_USB_KBD
+                     // USB keyboard/joystick: AND-merge (active-low) the virtual
+                     // matrix row into the PPI 0xA9 read and the USB joystick into
+                     // the PSG reg14 (0xA2) read, so USB and the real devices coexist.
+                     ( kbd_a9_req_r ) ? (bus_data & vkey_row) :
+                     ( psg_a2_reg14_req_r ) ? (bus_data & psg_joy_inject) :
+                `endif
                       bus_data;
     end
 
@@ -1004,6 +1017,76 @@ end
         end
     end
 
+`ifdef ENABLE_USB_KBD
+    //----------------------------------------------------------------
+    //-- USB keyboard virtual matrix (fed by UART from an RP2040, pin 75)
+    //--   The real motherboard scans its own keyboard through the PPI: a
+    //--   PPI port C (I/O 0xAA) write selects the matrix column, so we
+    //--   latch its low nibble (bits 3:0) as the active matrix column.
+    //--   PPI port B (I/O 0xA9) read returns the column's row state; we
+    //--   merge the FPGA virtual matrix row with the physical read in the
+    //--   cpu_din mux above via active-low AND, so both keyboards work.
+    //--   This logic only OBSERVES the bus and supplies vkey_row; it never
+    //--   drives the data bus on reads.
+    //----------------------------------------------------------------
+    wire ppi_c_req_w = (bus_addr[7:0] == 8'haa && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0);
+    reg [3:0] vkey_col;
+    always @(posedge clk_54m or negedge bus_reset_n)
+        if (!bus_reset_n) vkey_col <= 4'd0;
+        else if (ppi_c_req_w) vkey_col <= cpu_dout[3:0];
+
+    wire kbd_a9_req_r = (bus_addr[7:0] == 8'ha9 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
+    wire [7:0] vkey_row;
+
+    //----------------------------------------------------------------
+    //-- USB joystick (virtual, fed by UART from RP2040 via kbd_uart_rx)
+    //--   The MSX reads joysticks through the PSG: I/O 0xA0 selects the
+    //--   register, 0xA1 writes it, 0xA2 reads it. Our internal PSG is
+    //--   audio-only (its data output is unconnected), so the joystick read
+    //--   at 0xA2 (PSG reg 14) is served by the REAL MSX over the external
+    //--   bus and falls through the cpu_din mux to bus_data. We snoop the
+    //--   PSG register select (0xA0 write) and the port-select bits in PSG
+    //--   reg 15 (0xA1 write, bits[7:6], active-low), then AND-merge the USB
+    //--   joystick into the 0xA2/reg14 read so BOTH the real MSX joystick and
+    //--   the USB joystick work simultaneously. This block only OBSERVES the
+    //--   bus; it never drives the data bus. All in clk_54m.
+    //----------------------------------------------------------------
+    // Latch the PSG register number written via I/O 0xA0.
+    reg [3:0] psg_addr_latch;
+    always @(posedge clk_54m or negedge bus_reset_n)
+        if (!bus_reset_n) psg_addr_latch <= 4'd0;
+        else if (bus_addr[7:0] == 8'hA0 && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1)
+            psg_addr_latch <= cpu_dout[3:0];
+
+    // PSG reg 15 (Port B) write: bits[7:6] select the joystick port (active-low).
+    // bit6=0 -> port 1 (joy0), bit7=0 -> port 2 (joy1).
+    reg [1:0] psg_reg15_joy_sel;
+    always @(posedge clk_54m or negedge bus_reset_n)
+        if (!bus_reset_n) psg_reg15_joy_sel <= 2'b11;
+        else if (bus_addr[7:0] == 8'hA1 && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1
+                 && psg_addr_latch == 4'd15)
+            psg_reg15_joy_sel <= cpu_dout[7:6];
+
+    // True during a PSG reg-14 read (I/O 0xA2 read while reg 14 is selected).
+    wire psg_a2_reg14_req_r = (bus_addr[7:0] == 8'hA2 && bus_iorq_n == 0 && bus_m1_n == 1
+                               && bus_rd_n == 0 && psg_addr_latch == 4'd14);
+
+    // USB joystick state from the UART receiver (active-high as received).
+    wire [7:0] joy_usb0;
+    wire [7:0] joy_usb1;
+
+    // Remap active-high USB byte (bit0=R,1=L,2=D,3=U,4=A,5=B) to the MSX PSG
+    // Port A active-low layout (bit0=Up,1=Down,2=Left,3=Right,4=TrigA,5=TrigB).
+    wire [7:0] joy0_msx = {2'b11, ~joy_usb0[5], ~joy_usb0[4], ~joy_usb0[0], ~joy_usb0[1], ~joy_usb0[2], ~joy_usb0[3]};
+    wire [7:0] joy1_msx = {2'b11, ~joy_usb1[5], ~joy_usb1[4], ~joy_usb1[0], ~joy_usb1[1], ~joy_usb1[2], ~joy_usb1[3]};
+
+    // Select the merged value for the currently-selected port; if neither port
+    // is selected, present all-released (0xFF) so the AND-merge is transparent.
+    wire [7:0] psg_joy_inject = (!psg_reg15_joy_sel[0]) ? joy0_msx :
+                                (!psg_reg15_joy_sel[1]) ? joy1_msx :
+                                8'hFF;
+`endif
+
     //expanded slots 0 & 3
     reg [7:0] exp_slot0;
     wire [1:0] exp_slot0_page;
@@ -1214,6 +1297,31 @@ end
     always @ (posedge clk_54m) begin
         custom_rom_req <= ( bus_mreq_n == 0 && bus_rd_n == 0 && page_num[1] == 1 && pri_slot_num[0] == 1 && exp_slot0_num[3] == 1 ) ? 1 : 0;
     end
+`endif
+
+`ifdef ENABLE_USB_KBD
+    //----------------------------------------------------------------
+    //-- USB keyboard/joystick UART receiver (RP2040 -> pin 75). Runs entirely
+    //-- in clk_54m (same domain as the cpu_din mux and the vkey_col latch), so
+    //-- there is no multi-bit CDC; only the raw RX pin is async and is 2-flop
+    //-- synchronized inside the module. Drives vkey_row (merged into the PPI
+    //-- 0xA9 read) and joy_usb0/1 (merged into the PSG reg14 read).
+    //----------------------------------------------------------------
+    wire [7:0] kbd_fw_version;   // RP2040 firmware version (0xC0 announce)
+    kbd_uart_rx #(.CLK_FREQ(54_000_000), .BAUD(115200)) ukbd (
+        .clk                 (clk_54m),
+        .reset_n             (bus_reset_n),
+        .rx                  (kbd_uart_rx_pin),
+        .vkey_col            (vkey_col),
+        .vkey_row_out        (vkey_row),
+        .joy_state0          (joy_usb0),
+        .joy_state1          (joy_usb1),
+        .fw_version          (kbd_fw_version),
+        .cmd_scanline_toggle (),
+        .cmd_reset_pulse     (),
+        .cmd_osd_toggle      (),
+        .cmd_turbo_toggle    ()
+    );
 `endif
 
     //rtc

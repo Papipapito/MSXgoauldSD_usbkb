@@ -6,13 +6,15 @@
 #
 #  Uso:   gw_sh build.tcl        (o via el Makefile: make)
 #  Toolchain validado: Gowin 1.9.11.03 education (solo GowinSynthesis).
+#  usbkb fork: tambien Gowin 1.9.12.03 comercial -- esa version tiene varios
+#  dispositivos con el mismo part number y exige `set_device -name GW2AR-18C`.
 #  Salida:  impl/pnr/Z80_goauld.fs   ->  make flash
 #
 #  Modo del motor de comandos VDP: descomenta `define COMMAND_ACCURATE en
 #  vdp/vdp_config.vh para el modo de precision (por defecto: modo rapido).
 #-----------------------------------------------------------------------------
 
-set_device GW2AR-LV18QN88C8/I7
+set_device -name GW2AR-18C GW2AR-LV18QN88C8/I7
 
 add_file ikaopll/IKAOPLL.v
 add_file ikaopll/IKAOPLL_dac.v
@@ -78,6 +80,7 @@ add_file src/hdmi/serializer.sv
 add_file src/hdmi/source_product_description_info_frame.sv
 add_file src/hdmi/tmds_channel.sv
 add_file src/impulse.v
+add_file src/kbd_uart_rx.v
 add_file src/lpf_butter4_8k.v
 add_file src/megaram.v
 add_file src/memory.v
