@@ -8,3 +8,17 @@ rp2040/*_cfg.log
 test_hw/
 production/goauld_rom_int.bin
 production/*.elf
+
+# Gowin headless build outputs (project.* -- the IDE outputs are Z80_goauld.*)
+fpga/impl/pnr/project.*
+fpga/impl/pnr/project_*
+fpga/impl/gwsynthesis/project.*
+fpga/impl/gwsynthesis/project_*
+# $readmemh helper copy next to top.v + build logs
+fpga/bios_missing.hex
+fpga/build_*.log
+*.log
+
+# ruflo / codegraph side files
+ruvector.db
+**/ruvector.db

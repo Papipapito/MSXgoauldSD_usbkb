@@ -63,6 +63,14 @@ set_max_delay -from [get_pins {cpu1/?*/Q}] -to [get_pins {cpu_din_*/D}] 18.1
 set_max_delay -from [get_pins {cpu1/?*/Q}] -to [get_pins {wait_cycles_*/D}]  18.2
 set_max_delay -from [get_pins {cpu1/?*/Q}] -to [get_pins {wait_cycles_*/CE}] 18.2
 
+// usbkb: wifi_lite (OCM, dominio 27 MHz) es de la misma clase que ocm_ports/rtc1/psg1
+// (false-path mas arriba): escrituras del Z80 cualificadas por IORQ/WR, con el dato de
+// cpu_dout estable >= 1 T-state (148 ns a 6.75 MHz) antes del estrobo. Con los extras
+// usbkb (mux de cpu_din/config) el P&R deja cpu1 (Read_To_Reg_r -> DO -> cpu_dout) ->
+// uwifi/*/CE en ~19.4 ns = -0.95 ns contra el periodo de 18.5. Se acota a 2 periodos en
+// vez de false_path para conservar una comprobacion real.
+set_max_delay -from [get_clocks {clock_54m}] -to [get_pins {uwifi/?*?/?*}] 37.0
+
 
 //set_false_path -from [get_clocks {clock_108m}] -to [get_pins {debug/?*?/CE}]
 //set_false_path -from [get_clocks {clock_27m}] -to [get_pins {debug/?*?/CE}]
