@@ -33,6 +33,9 @@ module vdp_top(
     //output  [1:0]   led,
 
     input   maxspr_n,
+    // usbkb: version guard -- high = paint a red border around the screen (the
+    // FPGA's built-in warning that the .fs / .uf2 / BIOS pack versions differ).
+    input   version_mismatch,
     input   scanlin_n,
     input   gromclk_ena_n,
     input   cpuclk_ena_n,
@@ -350,9 +353,19 @@ module vdp_top(
     wire [7:0] dvi_g;
     wire [7:0] dvi_b;
 
-    assign dvi_r = (scanlin && cy[0]) ? { 1'b0, VideoR,   1'b0 } : {VideoR,   2'b0 };
-    assign dvi_g = (scanlin && cy[0]) ? { 1'b0, VideoG,   1'b0 } : {VideoG,   2'b0 };
-    assign dvi_b = (scanlin && cy[0]) ? { 1'b0, VideoB,   1'b0 } : {VideoB,   2'b0 };
+    // usbkb version-mismatch RED BORDER (FPGA-side boot warning). The HDMI
+    // visible area is cx<720 && cy<screen_height ((0,0)=top-left visible). When
+    // version_mismatch is high, paint a BORDER_PX-thick red frame at the edges.
+    localparam [9:0] BORDER_PX = 10'd40;   // thick enough to survive TV overscan
+    wire [9:0] ver_scr_h    = pal_mode ? 10'd576 : 10'd480;
+    wire       ver_visible  = (cx < 10'd720) && (cy < ver_scr_h);
+    wire       ver_red_edge = version_mismatch && ver_visible &&
+                              (cx < BORDER_PX || cx >= (10'd720 - BORDER_PX) ||
+                               cy < BORDER_PX || cy >= (ver_scr_h - BORDER_PX));
+
+    assign dvi_r = ver_red_edge ? 8'hFF : (scanlin && cy[0]) ? { 1'b0, VideoR,   1'b0 } : {VideoR,   2'b0 };
+    assign dvi_g = ver_red_edge ? 8'h00 : (scanlin && cy[0]) ? { 1'b0, VideoG,   1'b0 } : {VideoG,   2'b0 };
+    assign dvi_b = ver_red_edge ? 8'h00 : (scanlin && cy[0]) ? { 1'b0, VideoB,   1'b0 } : {VideoB,   2'b0 };
 
 
 ///////////
