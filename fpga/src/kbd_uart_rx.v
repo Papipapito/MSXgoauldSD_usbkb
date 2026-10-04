@@ -32,11 +32,11 @@
 //       flip config2_ff[4] (turbo), alongside the boot menu (G) and Panasonic $41.
 //     - Full-matrix resync: 0xFE, then 11 row bytes m0..m10 (each = an active-low
 //       row state), then 0xFF. On 0xFE we enter a counted load (row 0..10),
-//       writing each byte to vkey_matrix[row]; the load finishes on 0xFF or after
-//       11 bytes have been consumed, whichever comes first.
+//       writing each byte to vkey_matrix[row]; the load always consumes the 11
+//       row bytes (a row byte may itself be 0xFF), the trailing 0xFF is ignored.
 //     - Firmware version announce: 0xC0 <version> (2 bytes). The RP2040 re-sends
-//       it with every 250 ms resync. Stored in fw_version for the top-level
-//       version guard (I/O 0x2E/0x2F); cleared to 0x00 by reset and by the ~1 s
+//       it with every 250 ms resync. Stored in fw_version (left unconnected in
+//       top.v since the version guard was removed); cleared to 0x00 by reset and by the ~1 s
 //       link-loss watchdog ("no firmware announced"). ADDITIVE: an old FPGA
 //       ignores 0xC0 in D_IDLE and the version byte after it decodes as an
 //       unknown command, also ignored.
@@ -53,7 +53,8 @@
 
 module kbd_uart_rx #(
     parameter CLK_FREQ = 54_000_000,   // clk frequency in Hz (clk_54m)
-    parameter BAUD     = 115_200       // UART baud rate
+    parameter BAUD     = 115_200,      // UART baud rate
+    parameter WD_DADO  = 0             // placement "die": extra watchdog ticks (a few us on ~1 s, no functional effect)
 )(
     input  wire        clk,            // single clock domain (clk_54m in top.v)
     input  wire        reset_n,        // active-low synchronous-ish reset (bus_reset_n)
@@ -243,7 +244,7 @@ module kbd_uart_rx #(
     // exactly one procedural writer (no multiple-driver conflict).
     //------------------------------------------------------------------------
     localparam integer WD_W     = 26;             // 2^26 = 67.1M > 54M, enough for 1 s
-    localparam integer WD_LIMIT = CLK_FREQ;       // 54_000_000 ticks ~= 1 s
+    localparam integer WD_LIMIT = CLK_FREQ + WD_DADO;   // 54_000_000 ticks ~= 1 s (+ the die)
     reg [WD_W-1:0] wd_counter = {WD_W{1'b0}};
 
     always @(posedge clk) begin

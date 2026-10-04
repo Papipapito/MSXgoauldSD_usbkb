@@ -4,11 +4,11 @@
 #  Espejo del proyecto de la GUI (Z80_goauld.gprj). Si anades/quitas ficheros
 #  en la GUI, actualiza tambien esta lista (o regenerala desde el .gprj).
 #
-#  Uso:   gw_sh build.tcl        (o via el Makefile: make)
+#  Uso:   gw_sh build.tcl        (el Makefile de upstream desaparecio en la 0.95)
 #  Toolchain validado: Gowin 1.9.11.03 education (solo GowinSynthesis).
 #  usbkb fork: tambien Gowin 1.9.12.03 comercial -- esa version tiene varios
 #  dispositivos con el mismo part number y exige `set_device -name GW2AR-18C`.
-#  Salida:  impl/pnr/Z80_goauld.fs   ->  make flash
+#  Salida:  impl/pnr/project.fs  (el IDE, en cambio, genera impl/pnr/Z80_goauld.fs)
 #
 #  Modo del motor de comandos VDP: descomenta `define COMMAND_ACCURATE en
 #  vdp/vdp_config.vh para el modo de precision (por defecto: modo rapido).
@@ -140,6 +140,10 @@ add_file tang9k.cst
 add_file Z80_goauld.sdc
 
 set_option -use_sspi_as_gpio 1 -use_mspi_as_gpio 1 -top_module top -verilog_std sysv2017 -include_path "src;vdp"
+# usbkb v2 sobre la 0.95: los caminos de medio ciclo de upstream cpu1/RD,IORQ -> state_wait/wait_io_ff
+# quedan a +-1 ns segun el colocado. Con place 2 + route 2 y el dado KBD_DADO = 0 (top.v) cierra con
+# +0,93 ns (campana del 04/10/2026: 3 de 8 dados pasan). Si un cambio de RTL lo rompe, tirar dados.
+set_option -place_option 2 -route_option 2
 
 run syn
 run pnr

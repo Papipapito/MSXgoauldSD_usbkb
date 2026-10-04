@@ -109,13 +109,9 @@
 	rrca
 	rrca
 	ld   (var_turbo), a
-	ld   a, b
-	and  #20						; Bit 5: sprite limit 8/line (screen 2 anti-flicker)
-	rrca
-	rrca
-	rrca
-	rrca
-	rrca
+
+	in   a, (#43)					; #43 (usbkb core) Bit 0: sprite limit 8/line (screen 2 anti-flicker)
+	and  #01
 	ld   (var_sprlim), a
 
 	ei
@@ -435,6 +431,11 @@ config_var2byte:
 	ld   c, #41
 	call set_settings
 
+	ld   a, (var_sprlim)			; #43 Bit 0: sprite limit 8/line (before the #42 save)
+	ld   b, a
+	ld   c, #43
+	call set_settings
+
 	ld   a, (var_sdcard)			; #42 Bit 0: SD Card enable
 	ld   b, a
 	ld   a, (var_sdcslt)			; #42 Bits2,1: SD Card slot
@@ -449,14 +450,6 @@ config_var2byte:
 	or   b
 	ld   b, a
 	ld   a, (var_turbo)			; #42 Bit 4: turbo
-	rlca
-	rlca
-	rlca
-	rlca
-	or   b
-	ld   b, a
-	ld   a, (var_sprlim)			; #42 Bit 5: sprite limit 8/line
-	rlca
 	rlca
 	rlca
 	rlca

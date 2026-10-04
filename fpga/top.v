@@ -71,10 +71,9 @@ module top
     //usb uart
     output wire usb_uart_tx,
 
-`ifdef ENABLE_USB_KBD
-    // USB keyboard/joystick virtual-matrix UART RX (RP2040 GP15 PIO-UART TX -> pin 75)
+    // USB keyboard/joystick virtual-matrix UART RX (RP2040 GP15 PIO-UART TX -> pin 75).
+    // Declared always (tang9k.cst constrains it); only the logic depends on ENABLE_USB_KBD.
     input wire kbd_uart_rx_pin,
-`endif
 
     // Magic ports for SDRAM to be inferred
     output wire O_sdram_clk,
@@ -631,10 +630,6 @@ end
                      ( config_req == 1 && config_ok == 1) ? config_dout :
                      ( config_req == 1 && pana_sel == 1) ? pana_dout :      // usbkb: Panasonic dev 8 readback
                      ( config_req == 1 && config_ok == 0) ? swio_dout :
-                `ifdef ENABLE_USB_KBD
-                     ( ver_fpga_req_r ) ? FPGA_VERSION :                   // usbkb: IN 0x2F
-                     ( ver_sel_req_r ) ? ver_sel_dout :                     // usbkb: IN 0x2E
-                `endif
                 `endif
                      ( kanji_driver_req == 1 ) ? ram_dout :
                      ( kanji_data_req_r == 1 ) ? ram_dout :
@@ -1034,13 +1029,32 @@ end
     //--   This logic only OBSERVES the bus and supplies vkey_row; it never
     //--   drives the data bus on reads.
     //----------------------------------------------------------------
-    wire ppi_c_req_w = (bus_addr[7:0] == 8'haa && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0);
+    // Registered I/O cycle for ALL the usbkb snoops and read selects. The raw
+    // T80 RD/IORQ nets feed the half-cycle wait FSM (state_wait/wait_io_ff),
+    // which is the critical path; registering them here leaves a single load per
+    // strobe instead of a dozen. Address and data are registered on the SAME edge,
+    // so every decode below sees one coherent snapshot of the bus (no false hit
+    // when the strobe outlives the I/O cycle and bus_addr already moved on).
+    // One clk_54m (18.5 ns) of latency is harmless: a Z80 I/O cycle lasts
+    // hundreds of ns (even in turbo) and the CPU samples the read data at its end.
+    reg usb_io_wr = 0;
+    reg usb_io_rd = 0;
+    reg [7:0] usb_io_addr = 8'h00;
+    reg [7:0] usb_io_dout = 8'h00;
+    always @(posedge clk_54m) begin
+        usb_io_wr   <= (bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0);
+        usb_io_rd   <= (bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
+        usb_io_addr <= bus_addr[7:0];
+        usb_io_dout <= cpu_dout;
+    end
+
+    wire ppi_c_req_w = (usb_io_addr == 8'haa && usb_io_wr);
     reg [3:0] vkey_col;
     always @(posedge clk_54m or negedge bus_reset_n)
         if (!bus_reset_n) vkey_col <= 4'd0;
-        else if (ppi_c_req_w) vkey_col <= cpu_dout[3:0];
+        else if (ppi_c_req_w) vkey_col <= usb_io_dout[3:0];
 
-    wire kbd_a9_req_r = (bus_addr[7:0] == 8'ha9 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
+    wire kbd_a9_req_r = (usb_io_addr == 8'ha9 && usb_io_rd);
     wire [7:0] vkey_row;
 
     //----------------------------------------------------------------
@@ -1060,21 +1074,20 @@ end
     reg [3:0] psg_addr_latch;
     always @(posedge clk_54m or negedge bus_reset_n)
         if (!bus_reset_n) psg_addr_latch <= 4'd0;
-        else if (bus_addr[7:0] == 8'hA0 && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1)
-            psg_addr_latch <= cpu_dout[3:0];
+        else if (usb_io_addr == 8'hA0 && usb_io_wr)
+            psg_addr_latch <= usb_io_dout[3:0];
 
     // PSG reg 15 (Port B) write: bits[7:6] select the joystick port (active-low).
     // bit6=0 -> port 1 (joy0), bit7=0 -> port 2 (joy1).
     reg [1:0] psg_reg15_joy_sel;
     always @(posedge clk_54m or negedge bus_reset_n)
         if (!bus_reset_n) psg_reg15_joy_sel <= 2'b11;
-        else if (bus_addr[7:0] == 8'hA1 && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1
+        else if (usb_io_addr == 8'hA1 && usb_io_wr
                  && psg_addr_latch == 4'd15)
-            psg_reg15_joy_sel <= cpu_dout[7:6];
+            psg_reg15_joy_sel <= usb_io_dout[7:6];
 
     // True during a PSG reg-14 read (I/O 0xA2 read while reg 14 is selected).
-    wire psg_a2_reg14_req_r = (bus_addr[7:0] == 8'hA2 && bus_iorq_n == 0 && bus_m1_n == 1
-                               && bus_rd_n == 0 && psg_addr_latch == 4'd14);
+    wire psg_a2_reg14_req_r = (usb_io_addr == 8'hA2 && usb_io_rd && psg_addr_latch == 4'd14);
 
     // USB joystick state from the UART receiver (active-high as received).
     wire [7:0] joy_usb0;
@@ -1093,60 +1106,7 @@ end
 `endif
 
 `ifdef ENABLE_USB_KBD
-    //----------------------------------------------------------------
-    //-- Version guard (I/O 0x2E/0x2F) -- keeps the three flashables in step.
-    //--   All three artifacts carry the SAME BCD version (0x20 = v2.0):
-    //--     .fs  = FPGA_VERSION below;
-    //--     .uf2 = announced by the RP2040 as 0xC0 <ver> with every 250 ms
-    //--            resync (fw_version from kbd_uart_rx; 0x00 = link down);
-    //--     .bin = LAST byte of the 512KB BIOS pack (flash 0x27FFFF), latched
-    //--            by the flash loader FSM while it streams the pack at boot.
-    //--   Reads (never driven onto the external bus, cpu_din substitution only):
-    //--     IN 0x2F          -> FPGA_VERSION
-    //--     OUT 0x2F,n       -> select what IN 0x2E returns:
-    //--     IN 0x2E (n=0)    -> RP2040 firmware version (0x00 = not announced)
-    //--     IN 0x2E (n=1)    -> BIOS pack version byte  (0xFF = pack w/o version)
-    //--     IN 0x2E (n=2)    -> verify status: 0x00 = ALL MATCH, else
-    //--                         bit0 uf2 mismatch, bit1 uf2 not announced,
-    //--                         bit2 pack mismatch, bit3 pack has no version
-    //--   BASIC check:  OUT &H2F,2 : IF INP(&H2E)=0 THEN PRINT"OK"
-    //--   Caveat: reads of 0x2E/0x2F shadow the S-1985 engine test registers
-    //--   on machines that have one (writes still reach the real bus).
-    //----------------------------------------------------------------
-    localparam [7:0] FPGA_VERSION = 8'h20;   // v2.0 -- bump together with FW_VERSION (usbin.h) and the pack byte
-
     wire cmd_turbo_toggle;                   // F11 live turbo toggle pulse (kbd cmd 0x04)
-
-    // OUT 0x2F latches the read-index for 0x2E.
-    reg [1:0] ver_index;
-    always @(posedge clk_54m or negedge bus_reset_n)
-        if (!bus_reset_n) ver_index <= 2'd0;
-        else if (bus_addr[7:0] == 8'h2F && bus_iorq_n == 0 && bus_wr_n == 0 && bus_m1_n == 1)
-            ver_index <= cpu_dout[1:0];
-
-    wire ver_fpga_req_r = (bus_addr[7:0] == 8'h2F && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
-    wire ver_sel_req_r  = (bus_addr[7:0] == 8'h2E && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0);
-
-    // The FPGA does the verification: 0x00 = everything matches.
-    wire [7:0] ver_status = { 4'b0000,
-                              (ff_pack_version == 8'hFF || ff_pack_version == 8'h00), // bit3: pack has no version byte
-                              (ff_pack_version != FPGA_VERSION),                      // bit2: pack mismatch
-                              (kbd_fw_version  == 8'h00),                             // bit1: uf2 not announced / link down
-                              (kbd_fw_version  != FPGA_VERSION) };                    // bit0: uf2 mismatch
-
-    wire [7:0] ver_sel_dout = (ver_index == 2'd0) ? kbd_fw_version  :
-                              (ver_index == 2'd1) ? ff_pack_version :
-                              (ver_index == 2'd2) ? ver_status      : FPGA_VERSION;
-
-    // Red-border warning: assert ONLY on stable, real mismatches -- a loaded pack
-    // whose version differs (incl. 0xFF packs w/o version) or an ANNOUNCED uf2
-    // whose version differs. Excludes 0x00 (pack not yet loaded at boot; RP2040
-    // optional / not announced) so there is no false red at boot and none
-    // without an RP2040.
-    wire version_mismatch = (ff_pack_version != 8'h00 && ff_pack_version != FPGA_VERSION) ||
-                            (kbd_fw_version  != 8'h00 && kbd_fw_version  != FPGA_VERSION);
-`else
-    wire version_mismatch = 1'b0;
 `endif
 
     //expanded slots 0 & 3
@@ -1369,8 +1329,12 @@ end
     //-- synchronized inside the module. Drives vkey_row (merged into the PPI
     //-- 0xA9 read) and joy_usb0/1 (merged into the PSG reg14 read).
     //----------------------------------------------------------------
-    wire [7:0] kbd_fw_version;   // RP2040 firmware version (0xC0 announce)
-    kbd_uart_rx #(.CLK_FREQ(54_000_000), .BAUD(115200)) ukbd (
+    // KBD_DADO: placement "die" (as PERIOD_MS in the MSXimus). Only moves the USB
+    // watchdog (~1 s) by a few microseconds, but re-rolls Gowin's placement: the
+    // upstream half-cycle paths cpu1/RD -> state_wait/wait_io_ff sit at +-1 ns and
+    // any netlist change can flip them. Re-roll with build campaigns when it fails.
+    localparam integer KBD_DADO = 0;
+    kbd_uart_rx #(.CLK_FREQ(54_000_000), .BAUD(115200), .WD_DADO(KBD_DADO)) ukbd (
         .clk                 (clk_54m),
         .reset_n             (bus_reset_n),
         .rx                  (kbd_uart_rx_pin),
@@ -1378,7 +1342,7 @@ end
         .vkey_row_out        (vkey_row),
         .joy_state0          (joy_usb0),
         .joy_state1          (joy_usb1),
-        .fw_version          (kbd_fw_version),
+        .fw_version          (),                 // RP2040 version announce (0xC0): unused since the version guard went
         .cmd_scanline_toggle (),
         .cmd_reset_pulse     (),
         .cmd_osd_toggle      (),
@@ -1450,7 +1414,7 @@ end
         .adc_mosi (),
         .adc_miso (0),
 
-        .maxspr_n    (~config_enable_8sprites),   // usbkb: config2_ff[5] 0 => 4 sprites/line (std), 1 => 8/line
+        .maxspr_n    (~config_enable_8sprites),   // usbkb: config3_ff[0] (I/O #43) 0 => 4 sprites/line (std), 1 => 8/line
     `ifdef ENABLE_SCAN_LINES
         .scanlin_n   (~config_enable_scanlines),
     `else
@@ -1475,8 +1439,7 @@ end
         .tmds_clk_p    (clk_p),
         .tmds_clk_n    (clk_n),
         .tmds_data_p   (data_p),
-        .tmds_data_n   (data_n),
-        .version_mismatch (version_mismatch)   // usbkb: red border on .fs/.uf2/pack mismatch
+        .tmds_data_n   (data_n)
     );
 `else // ENABLE_V9958
     // Generate 13.5 MHz (DH) and 6.75 MHz (DL) from clk_27m when VDP is disabled
@@ -2002,6 +1965,15 @@ memory_ctrl mem1 (
 
     localparam CONFIG1_DEFAULT = 8'hfb;
     localparam CONFIG2_DEFAULT = 8'h0f;
+    // usbkb: third config byte (I/O #43), stored in flash byte 4 of the config
+    // tail as {CONFIG3_SIG, config3[3:0]}. The signature nibble keeps old packs
+    // and flashes (byte 4 = 0x00 in the pack, 0xFF after a save by an older core)
+    // on CONFIG3_DEFAULT instead of switching options on by surprise.
+    //   bit0 = 8 sprites/line (screen 2 anti-flicker); bits 3:1 free.
+    // #42 bit5 stays free (unused by the core, as upstream) for the SD launcher's
+    // "At boot" option.
+    localparam [3:0] CONFIG3_DEFAULT = 4'h0;
+    localparam [3:0] CONFIG3_SIG     = 4'hA;
 
 `ifdef ENABLE_CONFIG
     //config
@@ -2010,6 +1982,9 @@ memory_ctrl mem1 (
     reg [7:0] config1_temp_ff;
     reg [7:0] config2_ff = CONFIG2_DEFAULT;
     reg [7:0] config2_temp_ff;
+    reg [3:0] config3_ff = CONFIG3_DEFAULT;     // usbkb: I/O #43 (see CONFIG3_SIG)
+    reg [3:0] config3_temp_ff;
+    reg config3_update;
     reg [1:0] config_mapper_slot_ff = 2'b11;
     reg [1:0] config_megaram_slot_ff = 2'b11;
     reg [1:0] config_sdcard_slot_ff = 2'b11;
@@ -2022,7 +1997,7 @@ memory_ctrl mem1 (
     reg config_enable_sdcard;
     wire config_enable_wait;
     reg config_enable_turbo;
-    wire config_enable_8sprites;   // usbkb: config2_ff[5] -> 8 sprites/line (screen 2 anti-flicker)
+    wire config_enable_8sprites;   // usbkb: config3_ff[0] (I/O #43) -> 8 sprites/line (screen 2 anti-flicker)
     reg pana_turbo_update;         // usbkb: pulse when OUT &H41 (Panasonic dev 8) writes turbo
     reg pana_turbo_bit;            // usbkb: turbo value from the Panasonic port
     reg config_reset_ff;
@@ -2037,6 +2012,7 @@ memory_ctrl mem1 (
     wire config0_req;
     wire config1_req;
     wire config2_req;
+    wire config3_req;
     wire config_reset_req;
     wire config_reset;
     wire config_ok;
@@ -2048,6 +2024,7 @@ memory_ctrl mem1 (
         config_flash_write_ff <= 0;
         config1_update <= 0;
         config2_update <= 0;
+        config3_update <= 0;
         pana_turbo_update <= 0;
         if (cpu_clk_54 == 1 ) begin
             if (config0_req == 1 ) begin
@@ -2074,6 +2051,10 @@ memory_ctrl mem1 (
                     config_reset_ff <= 1;
                 end
             end
+            if (config3_req == 1 ) begin           // usbkb: I/O #43
+                config3_update <= 1;
+                config3_temp_ff <= cpu_dout[3:0];
+            end
         end
     end
 
@@ -2087,16 +2068,30 @@ memory_ctrl mem1 (
     end
 
     reg config_init_delay = 0;
+    // usbkb: 0 only until the first config load after the FPGA is configured
+    // (power-on). It is NOT cleared by bus/menu resets, so a later config_init
+    // (the loader re-runs after "Save & Reset") is told apart from power-on.
+    reg config_poweron_done = 0;
     always @ (posedge clk_54m) begin
         config_init_delay <= config_init;
+        // config_init is a LEVEL that lasts several cycles: mark power-on as done
+        // only when the FIRST config_init ends, so every cycle of it clears turbo.
+        if (config_init_delay == 1 && config_init == 0)
+            config_poweron_done <= 1;
         if (config_init == 1 ) begin
+            // usbkb: turbo (config2_ff[4]) is forced OFF at POWER-ON only (anti-brick,
+            // as v1.3 c8d3a9b): the machine never powers up straight into turbo. A turbo
+            // saved from the menu is honoured after "Save & Reset" / later reloads, and
+            // F11 / Panasonic $41 / the menu also switch it live.
             if (s2 == 1) begin
                 config1_ff <= CONFIG1_DEFAULT;
-                config2_ff <= CONFIG2_DEFAULT;
+                config2_ff <= CONFIG2_DEFAULT & 8'hEF;   // clear bit4 (turbo)
+                config3_ff <= CONFIG3_DEFAULT;
             end
             else begin
                 config1_ff <= config_sig[2];
-                config2_ff <= config_sig[3];
+                config2_ff <= config_poweron_done ? config_sig[3] : (config_sig[3] & 8'hEF);
+                config3_ff <= (config_sig[4][7:4] == CONFIG3_SIG) ? config_sig[4][3:0] : CONFIG3_DEFAULT;
             end
         end
         if (config1_update == 1) begin
@@ -2104,6 +2099,9 @@ memory_ctrl mem1 (
         end
         if (config2_update == 1) begin
             config2_ff <= config2_temp_ff;
+        end
+        if (config3_update == 1) begin
+            config3_ff <= config3_temp_ff;
         end
         if (pana_turbo_update == 1) begin
             config2_ff[4] <= pana_turbo_bit;   // usbkb: Panasonic software turbo control
@@ -2131,14 +2129,16 @@ memory_ctrl mem1 (
     assign config0_req = (bus_addr[7:0] == 8'h40 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0)? 1:0;
     assign config1_req = (config_ok == 1 && bus_addr[7:0] == 8'h41 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0)? 1:0;
     assign config2_req = (config_ok == 1 && bus_addr[7:0] == 8'h42 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0)? 1:0;
+    assign config3_req = (config_ok == 1 && bus_addr[7:0] == 8'h43 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0)? 1:0;
     assign config_enable_scanlines = config1_ff[3];
     //assign config_keyboard = config2_ff[4:3];
     assign config_enable_wait = config2_ff[3];
     assign config_req = (bus_addr[7:4] == 4'h4 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0)? 1:0;
     assign config_dout = ( bus_addr[3:0] == 4'h0 ) ? config0_ff :
                          ( bus_addr[3:0] == 4'h1 ) ? config1_ff :
-                         ( bus_addr[3:0] == 4'h2 ) ? config2_ff : 8'hff;
-    assign config_enable_8sprites = config2_ff[5];   // usbkb: 8 sprites/line; default off (CONFIG2_DEFAULT bit5=0)
+                         ( bus_addr[3:0] == 4'h2 ) ? config2_ff :
+                         ( bus_addr[3:0] == 4'h3 ) ? { 4'h0, config3_ff } : 8'hff;   // usbkb: IN #43
+    assign config_enable_8sprites = config3_ff[0];   // usbkb: 8 sprites/line; default off (CONFIG3_DEFAULT)
 
     // ===== usbkb Panasonic switched-I/O device 8 (T9769 turbo, WSX style) =====
     // Software compat: OUT &H40,8 selects device 8 (config0_ff = ~8 = 0xF7);
@@ -2169,6 +2169,8 @@ memory_ctrl mem1 (
         // also update the latched enable here (same always block = one driver).
         // The 6.75 MHz video-derived turbo + the glitch-free turbo_safe switch
         // were validated toggling live on HW in v1.3.
+        if (config2_update == 1)
+            config_enable_turbo <= config2_temp_ff[4];   // usbkb: menu Save applies turbo live
         if (pana_turbo_update == 1)
             config_enable_turbo <= pana_turbo_bit;
 `ifdef ENABLE_USB_KBD
@@ -2241,12 +2243,6 @@ memory_ctrl mem1 (
     reg ff_flash_rd = 0;
     reg ff_flash_terminate = 0;
     reg [7:0] ff_rom_dout;
-    // usbkb version guard: the pack's version byte is the LAST byte of the 512KB
-    // BIOS pack (flash 0x200000 + 0x7FFFF). The loader streams the whole pack at
-    // boot, so we just latch that byte as it goes by. 0x00 until read; 0xFF on
-    // packs that carry no version byte.
-    localparam [23:0] PACK_VER_FLASH_ADDR = 24'h27FFFF;
-    reg [7:0] ff_pack_version = 8'h00;
     reg flash_wait_n;
     wire[7:0] flash_dout;
     wire flash_data_ready;
@@ -2259,7 +2255,8 @@ memory_ctrl mem1 (
                              (flash_write_counter == 8'd01) ? 8'h42 :
                         `ifdef ENABLE_CONFIG
                              (flash_write_counter == 8'd02) ? config1_ff :
-                             (flash_write_counter == 8'd03) ? config2_ff : 8'hff;
+                             (flash_write_counter == 8'd03) ? config2_ff :
+                             (flash_write_counter == 8'd04) ? { CONFIG3_SIG, config3_ff } : 8'hff;   // usbkb: #43
                         `else
                              (flash_write_counter == 8'd02) ? CONFIG1_DEFAULT :
                              (flash_write_counter == 8'd03) ? CONFIG2_DEFAULT : 8'hff;
@@ -2375,10 +2372,6 @@ memory_ctrl mem1 (
     
                             ff_rom_wr <= 1;
                             ff_rom_addr <= ff_rom_addr + 1;
-                            // usbkb version guard: capture the pack version byte
-                            // as the loader streams past it (same data, same beat).
-                            if (ff_flash_addr == PACK_VER_FLASH_ADDR)
-                                ff_pack_version <= flash_dout;
                             ff_rom_dout <= flash_dout; 
     
                         end
