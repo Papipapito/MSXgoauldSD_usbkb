@@ -38,8 +38,8 @@ target_link_libraries(goauld_friend
     pico_multicore
 )
 
-# The keyboard link OWNS uart0 (GPIO0 = TX). Keep stdio OFF the UART so it
-# never claims GPIO0/uart0 and corrupts the keyboard stream.
+# The keyboard link is a PIO UART on GP15 (TX -> FPGA pin 75). Keep stdio OFF
+# the hardware UART so it never claims pins that could clash with the link.
 #
 # NOTE: the RP2040's single USB controller is already in HOST mode for the
 # keyboard (CFG_TUSB_RHPORT0_MODE = OPT_MODE_HOST), so it CANNOT also run a

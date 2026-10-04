@@ -1077,14 +1077,14 @@ end
         else if (usb_io_addr == 8'hA0 && usb_io_wr)
             psg_addr_latch <= usb_io_dout[3:0];
 
-    // PSG reg 15 (Port B) write: bits[7:6] select the joystick port (active-low).
-    // bit6=0 -> port 1 (joy0), bit7=0 -> port 2 (joy1).
-    reg [1:0] psg_reg15_joy_sel;
+    // PSG reg 15 (Port B) write: bit6 selects which joystick port reg 14 reads
+    // (0 = port 1 -> joy0, 1 = port 2 -> joy1). Bit7 is the kana LED, not a selector.
+    reg psg_reg15_joy_sel;
     always @(posedge clk_54m or negedge bus_reset_n)
-        if (!bus_reset_n) psg_reg15_joy_sel <= 2'b11;
+        if (!bus_reset_n) psg_reg15_joy_sel <= 1'b0;
         else if (usb_io_addr == 8'hA1 && usb_io_wr
                  && psg_addr_latch == 4'd15)
-            psg_reg15_joy_sel <= usb_io_dout[7:6];
+            psg_reg15_joy_sel <= usb_io_dout[6];
 
     // True during a PSG reg-14 read (I/O 0xA2 read while reg 14 is selected).
     wire psg_a2_reg14_req_r = (usb_io_addr == 8'hA2 && usb_io_rd && psg_addr_latch == 4'd14);
@@ -1098,11 +1098,9 @@ end
     wire [7:0] joy0_msx = {2'b11, ~joy_usb0[5], ~joy_usb0[4], ~joy_usb0[0], ~joy_usb0[1], ~joy_usb0[2], ~joy_usb0[3]};
     wire [7:0] joy1_msx = {2'b11, ~joy_usb1[5], ~joy_usb1[4], ~joy_usb1[0], ~joy_usb1[1], ~joy_usb1[2], ~joy_usb1[3]};
 
-    // Select the merged value for the currently-selected port; if neither port
-    // is selected, present all-released (0xFF) so the AND-merge is transparent.
-    wire [7:0] psg_joy_inject = (!psg_reg15_joy_sel[0]) ? joy0_msx :
-                                (!psg_reg15_joy_sel[1]) ? joy1_msx :
-                                8'hFF;
+    // Merged value for the selected port. A port with no USB pad reads as all
+    // released (0xFF), so the AND-merge is transparent.
+    wire [7:0] psg_joy_inject = psg_reg15_joy_sel ? joy1_msx : joy0_msx;
 `endif
 
 `ifdef ENABLE_USB_KBD
@@ -1333,7 +1331,7 @@ end
     // watchdog (~1 s) by a few microseconds, but re-rolls Gowin's placement: the
     // upstream half-cycle paths cpu1/RD -> state_wait/wait_io_ff sit at +-1 ns and
     // any netlist change can flip them. Re-roll with build campaigns when it fails.
-    localparam integer KBD_DADO = 0;
+    localparam integer KBD_DADO = 3;
     kbd_uart_rx #(.CLK_FREQ(54_000_000), .BAUD(115200), .WD_DADO(KBD_DADO)) ukbd (
         .clk                 (clk_54m),
         .reset_n             (bus_reset_n),

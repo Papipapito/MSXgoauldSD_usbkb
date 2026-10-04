@@ -141,8 +141,8 @@ add_file Z80_goauld.sdc
 
 set_option -use_sspi_as_gpio 1 -use_mspi_as_gpio 1 -top_module top -verilog_std sysv2017 -include_path "src;vdp"
 # usbkb v2 sobre la 0.95: los caminos de medio ciclo de upstream cpu1/RD,IORQ -> state_wait/wait_io_ff
-# quedan a +-1 ns segun el colocado. Con place 2 + route 2 y el dado KBD_DADO = 0 (top.v) cierra con
-# +0,93 ns (campana del 04/10/2026: 3 de 8 dados pasan). Si un cambio de RTL lo rompe, tirar dados.
+# quedan a +-1 ns segun el colocado. Con place 2 + route 2 y el dado KBD_DADO = 3 (top.v) cierra con
+# +0,61 ns (campana del 04/10/2026: 6 de 8 dados pasan). Si un cambio de RTL lo rompe, tirar dados.
 set_option -place_option 2 -route_option 2
 
 run syn

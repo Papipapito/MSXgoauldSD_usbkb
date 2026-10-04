@@ -57,7 +57,7 @@
 #define KB_SM          0u
 #define OP_MAKE        0x90
 #define OP_BREAK       0xA0
-#define OP_VERSION     0xC0   // 0xC0 <FW_VERSION> = version-guard announce (additive; old FPGAs ignore it)
+#define OP_VERSION     0xC0   // 0xC0 <FW_VERSION> = firmware version announce (informational; old FPGAs ignore it)
 #define RESYNC_START   0xFE
 #define RESYNC_END     0xFF
 

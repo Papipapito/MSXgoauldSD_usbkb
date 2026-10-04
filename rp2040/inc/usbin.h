@@ -15,10 +15,8 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-// Firmware version, BCD 0xVV (0x12 = v1.2). Version guard: MUST match the
-// FPGA's FPGA_VERSION (top.v) and the BIOS pack's version byte (LAST byte of
-// the 512KB pack). Announced to the FPGA as 0xC0 <FW_VERSION> with every
-// 250 ms resync; the FPGA exposes/verifies all three on I/O 0x2E/0x2F.
+// Firmware version, BCD 0xVV (0x20 = v2.0). Announced to the FPGA as
+// 0xC0 <FW_VERSION> with every 250 ms resync (informational).
 #define FW_VERSION 0x20
 
 #define MAX_REPORT 4
@@ -92,8 +90,8 @@ u8 hid_parse_keyboard_modifiers(hid_report_info_t* report_info_arr, const u8 *re
 bool hid_parse_keyboard_is_nkro(hid_report_info_t* report_info_arr);
 void kb_report_receive(u8 modifiers, u8 const* report, u16 len);
 
-// MSX Goa'uld keyboard UART link (uart0 @ 115200 8N1, GPIO0 = TX).
-void kb_uart_init(void);     // configure uart0 + GPIO0 for the keyboard link
+// MSX Goa'uld keyboard UART link (PIO UART @ 115200 8N1, GP15 = TX).
+void kb_uart_init(void);     // configure the PIO UART on GP15 for the keyboard link
 void kb_tx_pump(void);       // drain the TX ring into the UART FIFO (non-blocking)
 void kb_send_resync(void);   // push a full-matrix resync frame (0xFE..0xFF)
 void joy_send_resync(void);  // re-emit both MSX joystick ports (0xB0 frames)
