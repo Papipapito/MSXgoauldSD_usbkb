@@ -41,6 +41,7 @@
         <File path="jtopl/jtopll_reg.v" type="file.verilog" enable="1"/>
         <File path="jtopl/jtopll_reg_ch.v" type="file.verilog" enable="1"/>
         <File path="msx_debug/timing_debug.v" type="file.verilog" enable="1"/>
+        <File path="msx_debug/bus_monitor.v" type="file.verilog" enable="1"/>
         <File path="pulse_min_max/pulse_max.v" type="file.verilog" enable="1"/>
         <File path="pulse_min_max/pulse_min.v" type="file.verilog" enable="1"/>
         <File path="src/flash_rw.v" type="file.verilog" enable="1"/>

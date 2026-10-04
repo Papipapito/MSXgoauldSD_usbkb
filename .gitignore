@@ -19,3 +19,6 @@ fpga/impl/gwsynthesis/project_*
 # pack or the debug ELF.
 production/goauld_rom_int.bin
 production/*.elf
+
+# Local flash deliveries (.fs + BIOS pack pairs, copyrighted pack inside)
+files/

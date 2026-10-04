@@ -1,14 +1,21 @@
 `define ENABLE_V9958
 `define ENABLE_BIOS
-`define ENABLE_SOUND //v9958, bios required
 `define ENABLE_MAPPER //bios required
-`define ENABLE_SCAN_LINES
-`define ENABLE_SDCARD
-`define ENABLE_CONFIG
 `define ENABLE_WAIT //extra wait state for mreq+wr
 //`define ENABLE_WAIT_ADAPTIVE //wait required
 //`define SWAP23
+// DIAG_SLIM (Goa'uld Doctor build, see msx_debug/diag_macros.v) keeps only
+// what the diagnostic needs: T80, V9958+HDMI, SDRAM, flash loader, BIOS/
+// subrom/mapper decode, internal PPI/RTC, wait FSM, bus_monitor, Doctor ROM.
+// Out: OPLL/SCC/megaram, SD card/Nextor, settings ports + flash writer,
+// WiFi UART, USB keyboard/joystick link, kanji, version guard, debug UART.
+`ifndef DIAG_SLIM
+`define ENABLE_SOUND //v9958, bios required
+`define ENABLE_SCAN_LINES
+`define ENABLE_SDCARD
+`define ENABLE_CONFIG
 `define ENABLE_WIFI
+`endif
 
 module top
 #(
@@ -57,11 +64,9 @@ module top
     output wire sd_dat2,     // 1
     output wire sd_dat3,     // 1
 
-`ifdef ENABLE_WIFI
-    //uart
+    //uart (ESP link; the pins are in the cst, so always declared)
     output wire uart_tx,
     input wire uart_rx,
-`endif 
 
     //usb uart
     output wire usb_uart_tx,
@@ -120,12 +125,58 @@ end
     );
 
     wire bus_clk_3m6;
+`ifdef DIAG_AUTOBOOT
+    //----------------------------------------------------------------
+    //-- Goa'uld Doctor: robust clock.  If the board gives no Z80 clock
+    //-- (on an MSX1 it comes from the VDP's CPUCLK pin, so a dead VDP
+    //-- or crystal kills it) the core falls back to an internal 3.6 MHz
+    //-- (54/15) so the diagnostic ROM can still boot and REPORT it.
+    //-- The choice is latched at the end of every internal reset pulse
+    //-- (core in reset -> switching is glitch-free), never mid-run.
+    //----------------------------------------------------------------
+    wire bus_clk_3m6_pin;
+    PINFILTER dn1(
+        .clk(clk_54m),
+        .reset_n(1),
+        .din(ex_bus_clk_3m6),
+        .dout(bus_clk_3m6_pin)
+    );
+    reg [3:0] diag_iclk_cnt = 4'd0;
+    reg       diag_clk_int  = 1'b0;
+    always @ (posedge clk_54m) begin
+        diag_iclk_cnt <= (diag_iclk_cnt == 4'd14) ? 4'd0 : diag_iclk_cnt + 4'd1;
+        diag_clk_int  <= (diag_iclk_cnt < 4'd7);            // 7 high / 8 low
+    end
+    reg        diag_clk_pin_d   = 1'b0;
+    reg [11:0] diag_clk_win     = 12'd0;
+    reg        diag_clk_edge    = 1'b0;
+    reg        diag_clk_alive   = 1'b0;                     // edge in last 76 us
+    always @ (posedge clk_54m) begin
+        diag_clk_pin_d <= bus_clk_3m6_pin;
+        diag_clk_win   <= diag_clk_win + 12'd1;
+        if (diag_clk_pin_d ^ bus_clk_3m6_pin) diag_clk_edge <= 1'b1;
+        if (diag_clk_win == 12'hFFF) begin
+            diag_clk_alive <= diag_clk_edge;
+            diag_clk_edge  <= 1'b0;
+        end
+    end
+    wire diag_reset_n;                                      // defined below
+    reg  diag_reset_n_d = 1'b0;
+    reg  diag_clk_use_int = 1'b0;
+    always @ (posedge clk_54m) begin
+        diag_reset_n_d <= diag_reset_n;
+        if (diag_reset_n & ~diag_reset_n_d)                 // reset pulse ends
+            diag_clk_use_int <= ~diag_clk_alive;
+    end
+    assign bus_clk_3m6 = diag_clk_use_int ? diag_clk_int : bus_clk_3m6_pin;
+`else
     PINFILTER dn1(
         .clk(clk_54m),
         .reset_n(1),
         .din(ex_bus_clk_3m6),
         .dout(bus_clk_3m6)
     );
+`endif
     reg bus_clk_3m6_27;
 //    CLOCK_DIV #(
 //        .CLK_SRC(54.0),
@@ -192,12 +243,48 @@ end
     );
 
     wire bus_reset_n;
+`ifdef DIAG_AUTOBOOT
+    //----------------------------------------------------------------
+    //-- Goa'uld Doctor: robust reset.  The board's /RESET is treated as
+    //-- EDGE-sensitive: a falling edge produces a ~10 ms internal reset
+    //-- pulse, and the FPGA config itself produces one (power-on).  A
+    //-- /RESET stuck low therefore does NOT hold the core in reset - it
+    //-- is only reported (SYS_STAT bit2 / RST_EDGES) by the diagnostic.
+    //----------------------------------------------------------------
+    wire ex_reset_n_f;
+    PINFILTER dn3a(
+        .clk(clk_54m),
+        .reset_n(1),
+        .din(ex_bus_reset_n),
+        .dout(ex_reset_n_f)
+    );
+    reg        ex_reset_n_d   = 1'b0;            // 0: no false edge at config
+    reg [19:0] diag_rst_cnt   = 20'd0;           // counts up to 2^19 = 9.7 ms
+    reg [7:0]  diag_rst_edges = 8'd0;
+    always @ (posedge clk_54m) begin
+        ex_reset_n_d <= ex_reset_n_f;
+        if (ex_reset_n_d & ~ex_reset_n_f) begin  // falling edge on the pin
+            diag_rst_cnt <= 20'd0;
+            if (diag_rst_edges != 8'hFF) diag_rst_edges <= diag_rst_edges + 8'd1;
+        end
+        else if (!diag_rst_cnt[19])
+            diag_rst_cnt <= diag_rst_cnt + 20'd1;
+    end
+    assign diag_reset_n = diag_rst_cnt[19];
+    PINFILTER dn3(
+        .clk(clk_54m),
+        .reset_n(1),
+        .din(diag_reset_n & ~config_reset),
+        .dout(bus_reset_n)
+    );
+`else
     PINFILTER dn3(
         .clk(clk_54m),
         .reset_n(1),
         .din(ex_bus_reset_n & ~config_reset),
         .dout(bus_reset_n)
     );
+`endif
 
     wire bus_int_n;
 //    PINFILTER dn4(
@@ -386,12 +473,43 @@ end
     //assign ex_bus_rd_n = bus_rd_n;
     //assign ex_bus_wr_n = bus_wr_n;
 
+`ifdef DIAG_AUTOBOOT
+    //----------------------------------------------------------------
+    //-- Goa'uld Doctor control bits (bus_monitor CONTROL register 0x20)
+    //--   diag_slot0_ext : physical primary slot 0 of the board is read
+    //--                    through the bus (board BIOS / board RAM tests)
+    //--   diag_vdp_ext   : VDP I/O 0x98-0x9B goes to the board's own VDP
+    //--                    (internal V9958 deselected, reads from the bus)
+    //--   diag_ign_int / diag_ign_wait : mask the external lines to the core
+    //--   diag_ppi_ext   : IN 0xA8 returns the board's real PPI latch
+    //--   diag_kbd_usb_off / diag_kbd_phys_off : drop one keyboard source from
+    //--                    the IN 0xA9 merge (a noisy one would fake key presses)
+    //--   diag_rtc_ext   : IN 0xB5 returns the board's RTC (RP5C01) instead
+    //--                    of the internal one (writes reach both anyway)
+    //----------------------------------------------------------------
+    //--   diag_trans[3:0] : transparency mask per primary slot (CONTROL2);
+    //--                    slot 0 also honours the old slot0_ext bit
+    //--   diag_p3_release : hand the internal mapper's 3-0 page 3 to the bus too
+    wire diag_ctl_slot0, diag_vdp_ext, diag_ign_int, diag_ign_wait, diag_ppi_ext, diag_rtc_ext;
+    wire diag_kbd_usb_off, diag_kbd_phys_off;
+    wire [3:0] diag_trans;
+    wire diag_p3_release;
+    wire diag_wait_stuck;
+    wire diag_slot0_ext = diag_ctl_slot0 | diag_trans[0];
+    wire diag_slot3_ext = diag_trans[3];
+`else
+    wire diag_slot0_ext = 1'b0, diag_vdp_ext = 1'b0, diag_ign_int = 1'b0;
+    wire diag_ign_wait = 1'b0, diag_ppi_ext = 1'b0, diag_wait_stuck = 1'b0, diag_rtc_ext = 1'b0;
+    wire diag_kbd_usb_off = 1'b0, diag_kbd_phys_off = 1'b0;
+    wire diag_slot3_ext = 1'b0, diag_p3_release = 1'b0;
+`endif
+
     assign bus_mreq_disable = 0;
     assign bus_iorq_disable = (
                                 0
                         `ifdef ENABLE_V9958
-                                || vdp_csr_n == 0 || vdp_csw_n == 0 
-                        `endif 
+                                || ((vdp_csr_n == 0 || vdp_csw_n == 0) && diag_vdp_ext == 0)
+                        `endif
                                 ) ? 1 : 0;
 
     assign bus_disable = bus_mreq_disable | bus_iorq_disable;
@@ -441,17 +559,31 @@ end
 `endif
 
     always @ (posedge clk_54m) begin
-        cpu_din <= 
+        cpu_din <=
                 `ifdef ENABLE_V9958
-                     ( vdp_csr_n == 0) ? vdp_dout :
+                     ( vdp_csr_n == 0) ? (diag_vdp_ext ? bus_data : vdp_dout) :
                 `endif
+`ifdef DIAG_AUTOBOOT
+                     // Doctor: physical slot 3 transparent (board RAM/ROM in
+                     // any 3-x), keeping the internal mapper's 3-0 page 3
+                     // (our stack + BIOS work area) unless p3_release
+                     ( diag_slot3_ext == 1 && slotx_req_r == 1 &&
+                       !(exp_slotx_num[0] == 1 && page_num[3] == 1 && diag_p3_release == 0) ) ? bus_data :
+`endif
                 `ifdef ENABLE_MAPPER
                      ( mapper_read == 1) ? ram_dout :
                 `endif
                 `ifdef ENABLE_BIOS
                      ( exp_slot0_req_r == 1) ? ~exp_slot0  :
                      ( exp_slotx_req_r == 1) ? ~exp_slotx  :
-                     ( bios_req == 1) ? ram_dout : 
+`ifdef DIAG_AUTOBOOT
+                     // Doctor ROM (slot 0-3 page 1) always wins, then the rest
+                     // of physical slot 0 becomes transparent to the board
+                     // (board BIOS 0000-7FFF via subslot 0, board RAM pages 2/3)
+                     ( diag_req == 1) ? diag_dout :
+                     ( diag_slot0_ext == 1 && slot0_req_r == 1 ) ? bus_data :
+`endif
+                     ( bios_req == 1) ? ram_dout :
                      ( subrom_logo_req == 1 ) ? ram_dout :
                 `endif
                 `ifdef ENABLE_SDCARD
@@ -475,13 +607,15 @@ end
                      ( f2_req_r == 1 ) ? f2_port :
                      ( uart_req == 1 ) ? uart_dout :
                 `endif
-                     ( rtc_req_r == 1 ) ? rtc_dout :
-                     ( ppi_req_r == 1 ) ? ppi_port_a :
+                     ( rtc_req_r == 1 && diag_rtc_ext == 0 ) ? rtc_dout :
+                     ( ppi_req_r == 1 && diag_ppi_ext == 0 ) ? ppi_port_a :
                      ( slot0_req_r == 1 ) ? 8'hff :
                      ( slotx_req_r == 1 ) ? 8'hff :
+`ifndef DIAG_SLIM
                      // Version guard reads (see the 0x2E/0x2F block by the PSG merge)
                      ( ver_fpga_req_r ) ? FPGA_VERSION :
                      ( ver_sel_req_r  ) ? ver_sel_dout :
+`endif
                      // USB-keyboard merge: on an I/O 0xA9 keyboard-column read,
                      // AND the physical PPI read (bus_data) with the virtual
                      // matrix row. Both are active-low, so a key pressed on
@@ -491,8 +625,10 @@ end
                      // (bus_data) with the USB joystick. Both active-low, so a
                      // direction/button on EITHER pad pulls its bit to 0.
                      // All other reads fall through to bus_data unchanged.
-                     ( kbd_a9_req_r ) ? (bus_data & vkey_row) :
-                     ( psg_a2_reg14_req_r ) ? (bus_data & psg_joy_inject) : bus_data;
+                     ( kbd_a9_req_r ) ? ((bus_data | {8{diag_kbd_phys_off}}) & (vkey_row | {8{diag_kbd_usb_off}})) :
+                     ( psg_a2_reg14_req_r ) ? (bus_data & psg_joy_inject) :
+                     ( busmon_dat_re ) ? busmon_dout :
+                     bus_data;
     end
 
 
@@ -564,6 +700,7 @@ end
     assign wait_io = wait_io_ff;
 
   `ifndef ENABLE_WAIT_ADAPTIVE
+    wire wait_iorq_n = ex_bus_iorq_n;
     always @ (posedge clk_54m) begin
         if (~bus_reset_n) begin
             state_wait <= WAIT_IDLE;
@@ -572,7 +709,7 @@ end
         else begin
             case (state_wait)
                 WAIT_IDLE: begin
-                    if ( ram_write == 1 || (ex_bus_iorq_n == 0 || ( config_enable_wait == 1 && ex_bus_mreq_n == 0 ) )&& (bus_rd_n == 0 || bus_wr_n == 0) ) begin
+                    if ( ram_write == 1 || (wait_iorq_n == 0 || ( config_enable_wait == 1 && ex_bus_mreq_n == 0 ) )&& (bus_rd_n == 0 || bus_wr_n == 0) ) begin
                         wait_io_ff <= 0;
                         state_wait <= WAIT_STATE1;
                     end
@@ -657,21 +794,23 @@ end
     `endif
     `ifdef ENABLE_WIFI
       `ifndef ENABLE_WAIT_ADAPTIVE
-        .WAIT_n    (bus_wait_n & wait_uart),
+        .WAIT_n    ((bus_wait_n | diag_ign_wait | diag_wait_stuck) & wait_uart),
       `else
         .WAIT_n    (wait_uart),
       `endif
     `else
       `ifndef ENABLE_WAIT_ADAPTIVE
-        .WAIT_n    (bus_wait_n),
+        .WAIT_n    (bus_wait_n | diag_ign_wait | diag_wait_stuck),
       `else
         .WAIT_n    (1),
       `endif
     `endif
     `ifdef ENABLE_V9958
-        .INT_n     (bus_int_n & vdp_int),
+        // Doctor: external /INT maskable; internal VDP int held off while the
+        // VDP ports are routed to the board (its status is not being read).
+        .INT_n     ((bus_int_n | diag_ign_int) & (vdp_int | diag_vdp_ext)),
     `else
-        .INT_n     (bus_int_n),
+        .INT_n     (bus_int_n | diag_ign_int),
     `endif
         .NMI_n     (1),
         .BUSRQ_n   (1),
@@ -703,6 +842,17 @@ end
     //----------------------------------------------------------------
     assign ppi_req_r = (bus_addr[7:0] == 8'ha8 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0)? 1:0;
     assign ppi_req_w = (bus_addr[7:0] == 8'ha8 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0)? 1:0;
+
+    //----------------------------------------------------------------
+    //-- bus_monitor I/O port decodes (IDX=0x2C, DAT=0x2D)
+    //--   0x2C/0x2D chosen: free on MSX and NOT decoded by the Goa'uld.
+    //--   (0x40-0x4F is taken by config/OCM switched-I/O at l.468/1617/2175,
+    //--    which sit higher in the cpu_din mux and would shadow this read.)
+    //----------------------------------------------------------------
+    wire        busmon_idx_we = (bus_addr[7:0]==8'h2C && bus_iorq_n==0 && bus_m1_n==1 && bus_wr_n==0);
+    wire        busmon_dat_re = (bus_addr[7:0]==8'h2D && bus_iorq_n==0 && bus_m1_n==1 && bus_rd_n==0);
+    wire        busmon_dat_we = (bus_addr[7:0]==8'h2D && bus_iorq_n==0 && bus_m1_n==1 && bus_wr_n==0);
+    wire [7:0]  busmon_dout;
 
     always @ (posedge clk_27m or negedge bus_reset_n) begin
         if ( bus_reset_n == 0)
@@ -804,6 +954,7 @@ end
     //--   on machines that have one (writes still reach the real bus).
     //----------------------------------------------------------------
     localparam [7:0] FPGA_VERSION = 8'h12;   // v1.2 -- bump together with FW_VERSION (usbin.h) and the pack byte
+`ifndef DIAG_SLIM
 
     wire [7:0] kbd_fw_version;               // from kbd_uart_rx (0xC0 announce)
 
@@ -834,6 +985,9 @@ end
     // / not announced) so there is no false red at boot and none without a Pico.
     wire version_mismatch = (ff_pack_version != 8'h00 && ff_pack_version != FPGA_VERSION) ||
                             (kbd_fw_version  != 8'h00 && kbd_fw_version  != FPGA_VERSION);
+`else
+    wire version_mismatch = 1'b0;           // Doctor: no version guard, no red border
+`endif
 
     //expanded slots 0 & 3
     reg [7:0] exp_slot0;
@@ -935,6 +1089,17 @@ end
         bios_req <= ( bus_mreq_n == 0 && bus_rd_n == 0 && pri_slot_num[0] == 1 && exp_slot0_num[0] == 1) ? 1 : 0;
     end
 
+`ifdef DIAG_AUTOBOOT
+    //--- embedded diagnostic cartridge: slot 0-3 (pri 0, sub 3), page 1.
+    //--- BIOS slot-scan finds its 'AB' header and auto-boots it (no SD).
+    reg        diag_req;
+    wire [7:0] diag_dout;
+    always @ (posedge clk_54m) begin
+        diag_req <= ( bus_mreq_n == 0 && bus_rd_n == 0 && pri_slot_num[0] == 1 && exp_slot0_num[3] == 1 && page_num[1] == 1 ) ? 1 : 0;
+    end
+    diag_rom diagrom1 ( .clk(clk_54m), .addr(bus_addr[13:0]), .dout(diag_dout) );
+`endif
+
     //subrom
     reg subrom_req;
     wire [7:0] subrom_dout;
@@ -956,10 +1121,14 @@ end
     end
 
     //kanji driver
+`ifndef DIAG_SLIM
     reg kanji_driver_req;
     always @ (posedge clk_54m) begin
         kanji_driver_req <= ( bus_mreq_n == 0 && bus_rd_n == 0 && (page_num[1] == 1 || page_num[2] == 1) && pri_slot_num[0] == 1 && exp_slot0_num[1] == 1 ) ? 1 : 0;
     end
+`else
+    wire kanji_driver_req = 1'b0;
+`endif
 
 
 `else
@@ -975,6 +1144,9 @@ end
 
 `endif
 
+`ifndef ENABLE_WIFI
+    assign uart_tx = 1'b1;
+`endif
 `ifdef ENABLE_WIFI
 
     //wifi driver
@@ -1014,6 +1186,7 @@ end
     //--   vkey_row, which is merged with the physical keyboard read in the
     //--   cpu_din mux. v1: cmd_* pulse outputs are left open (Gowin trims).
     //----------------------------------------------------------------
+`ifndef DIAG_SLIM
     kbd_uart_rx #(.CLK_FREQ(54_000_000), .BAUD(115200)) ukbd (
         .clk                 (clk_54m),
         .reset_n             (bus_reset_n),
@@ -1027,6 +1200,11 @@ end
         .cmd_reset_pulse     (),
         .cmd_osd_toggle      ()
     );
+`else
+    assign vkey_row = 8'hFF;        // no USB keyboard: A9 is the board's alone
+    assign joy_usb0 = 8'h00;
+    assign joy_usb1 = 8'h00;
+`endif
 
     //rtc
     wire rtc_req_r;
@@ -1073,8 +1251,8 @@ end
         .reset_n (0),
     `endif
         .mode    (bus_addr[1:0]),
-        .csw_n   (vdp_csw_n),
-        .csr_n   (vdp_csr_n),
+        .csw_n   (vdp_csw_n | diag_vdp_ext),      // Doctor: deselected while
+        .csr_n   (vdp_csr_n | diag_vdp_ext),      // the board's VDP is under test
 
         .int_n   (vdp_int),
         .gromclk (),
@@ -1135,7 +1313,16 @@ end
                                                         { mapper_reg3, bus_addr[13:0] };
 
     always @ (posedge clk_54m) begin
+`ifdef DIAG_AUTOBOOT
+        // Doctor: while physical slot 3 is transparent the internal mapper
+        // must not take the cycle either - a page-2 fill with port FE = 0
+        // would land in segment 0, i.e. our own page 3 - except page 3
+        // itself (stack/variables) unless p3_release hands it to the board
+        mapper_req3 <= ( bus_rfsh_n == 1 && config_enable_mapper3 == 1 && bus_mreq_n == 0 && (bus_rd_n == 0 || bus_wr_n == 0 ) && pri_slot_num[SD_SLOT] == 1 && exp_slotx_num[0] == 1 && xffff == 0
+                         && !(diag_slot3_ext == 1 && !(page_num[3] == 1 && diag_p3_release == 0)) ) ? 1 : 0;
+`else
         mapper_req3 <= ( bus_rfsh_n == 1 && config_enable_mapper3 == 1 && bus_mreq_n == 0 && (bus_rd_n == 0 || bus_wr_n == 0 ) && pri_slot_num[SD_SLOT] == 1 && exp_slotx_num[0] == 1 && xffff == 0) ? 1 : 0;
+`endif
         mapper_req12 <= ( config_enable_mapper12 == 1 && bus_mreq_n == 0 && (bus_rd_n == 0 || bus_wr_n == 0 ) && pri_slot == config_mapper_slot ) ? 1 : 0;
     end
     assign mapper_req = mapper_req3 | mapper_req12;
@@ -1519,8 +1706,16 @@ memory_ctrl mem1 (
     wire kanji_data_ram_req;
     reg [7:0] kanji_data_dout;
     wire [17:0] kanji_data_ram_addr;
+`ifdef DIAG_SLIM
+    // Doctor: no kanji data ports - their I/O decode reaches the SDRAM
+    // controller inside the IORQ_n half cycle and was the last path that
+    // would not close; a kanji ROM on the board still answers via the bus
+    assign kanji_data_req_w = 1'b0;
+    assign kanji_data_req_r = 1'b0;
+`else
     assign kanji_data_req_w = (bus_addr[7:2] == 6'b110110 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_wr_n == 0)? 1 : 0; // I/O:B4-B5h   / I/O:D8-DBh / Kanji-data
     assign kanji_data_req_r = (bus_addr[7:2] == 6'b110110 && bus_iorq_n == 0 && bus_m1_n == 1 && bus_rd_n == 0)? 1 : 0; // I/O:B4-B5h   / I/O:D8-DBh / Kanji-data
+`endif
 
     kanji kanji1(
         .clk21m(clk_27m),
@@ -1710,12 +1905,13 @@ memory_ctrl mem1 (
     assign config_enable_megaram12 = 0;
     assign config_enable_ghost_scc = 0;
     assign config_enable_sdcard = 0;
-    assign config_enable_scanlines = 1;
+    assign config_enable_scanlines = 0;     // Doctor: plain text is easier to read/capture
     assign config_mapper_slot = 2'b11;
     assign config_megaram_slot = 2'b11;
     assign config_sdcard_slot= 2'b11;
     assign config_reset = 0;
-    assign config_enable_wait = 0;
+    assign config_enable_wait = 1;          // = CONFIG2_DEFAULT bit3
+    wire config_flash_write_ff = 1'b0;      // no settings writer
 
 `endif
 
@@ -2216,15 +2412,20 @@ memory_ctrl mem1 (
 
 `else
 
-    wire sd_busreq_w;
-    wire sram_busreq_w;
-    wire megarom_req;
-    wire megarom_page_req;
-    wire sram_cs_w;
-    wire sd_cs_w;
+    wire sd_busreq_w = 1'b0;
+    wire sram_busreq_w = 1'b0;
+    wire megarom_req = 1'b0;
+    wire megarom_page_req = 1'b0;
+    wire sram_cs_w = 1'b0;
+    wire sd_cs_w = 1'b0;
+    assign sd_sclk = 1'b1;
+    assign sd_dat1 = 1'b1;
+    assign sd_dat2 = 1'b1;
+    assign sd_dat3 = 1'b1;
 
 `endif
 
+`ifndef DIAG_SLIM
     // Switched I/O ports
     reg [1:0] Slot2Mode;
     wire  swio_req;
@@ -2291,6 +2492,65 @@ memory_ctrl mem1 (
         .send(send),
 
         .uart_tx(usb_uart_tx)
+    );
+`else
+    assign usb_uart_tx = 1'b1;              // Doctor: no debug UART
+`endif
+
+    bus_monitor busmon1 (
+        .clk        (clk_54m),
+        .reset_n    (bus_reset_n),
+        .bus_data   (bus_data),
+        .bus_addr   (bus_addr),
+        .bus_m1_n   (bus_m1_n),
+        .bus_rfsh_n (bus_rfsh_n),
+        .bus_iorq_n (bus_iorq_n),
+        .bus_mreq_n (bus_mreq_n),
+        .bus_rd_n   (bus_rd_n),
+        .bus_wr_n   (bus_wr_n),
+        .bus_int_n  (bus_int_n),
+        .bus_wait_n (bus_wait_n),
+`ifdef DIAG_AUTOBOOT
+        .clk_pin       (bus_clk_3m6_pin),
+        .clk_using_int (diag_clk_use_int),
+        .ex_reset_n    (ex_reset_n_f),
+        .rst_edges     (diag_rst_edges),
+`else
+        .clk_pin       (bus_clk_3m6),
+        .clk_using_int (1'b0),
+        .ex_reset_n    (bus_reset_n),
+        .rst_edges     (8'h00),
+`endif
+        .host_idx_in(cpu_dout),
+        .sel_idx_we (busmon_idx_we),
+        .sel_dat_re (busmon_dat_re),
+        .sel_dat_we (busmon_dat_we),
+        .host_dout  (busmon_dout),
+`ifdef DIAG_AUTOBOOT
+        .ctrl_slot0_ext (diag_ctl_slot0),
+        .ctrl_vdp_ext   (diag_vdp_ext),
+        .ctrl_ign_int   (diag_ign_int),
+        .ctrl_ign_wait  (diag_ign_wait),
+        .ctrl_ppi_ext   (diag_ppi_ext),
+        .ctrl_rtc_ext   (diag_rtc_ext),
+        .ctrl_kbd_usb_off  (diag_kbd_usb_off),
+        .ctrl_kbd_phys_off (diag_kbd_phys_off),
+        .ctrl_trans     (diag_trans),
+        .ctrl_p3_release(diag_p3_release),
+        .wait_stuck     (diag_wait_stuck)
+`else
+        .ctrl_slot0_ext (),
+        .ctrl_vdp_ext   (),
+        .ctrl_ign_int   (),
+        .ctrl_ign_wait  (),
+        .ctrl_ppi_ext   (),
+        .ctrl_rtc_ext   (),
+        .ctrl_kbd_usb_off  (),
+        .ctrl_kbd_phys_off (),
+        .ctrl_trans     (),
+        .ctrl_p3_release(),
+        .wait_stuck     ()
+`endif
     );
 
 

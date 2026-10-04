@@ -39,21 +39,20 @@ add_file msx_debug/timing_debug.v
 add_file msx_debug/bus_monitor.v
 add_file pulse_min_max/pulse_max.v
 add_file pulse_min_max/pulse_min.v
-add_file src/bios_msx2p.v
+add_file src/flash_rw.v
 add_file src/gowin/clk_108p.v
 add_file src/gowin_clkdiv/gowin_clkdiv.v
 add_file src/impulse.v
-add_file src/logo_fm.v
+add_file src/kbd_uart_rx.v
 add_file src/megaram.v
 add_file src/memory.v
 add_file src/msx2p_debug.v
+add_file src/ocm/kanji.v
 add_file src/ocm/rtc.v
 add_file src/psg_filter.v
-add_file src/subrom_msx2p.v
 add_file src/uart_tx.v
 add_file src/wondertang/crc16.v
 add_file src/wondertang/dpram.v
-add_file src/wondertang/flash.v
 add_file src/wondertang/pinfilter.v
 add_file src/wondertang/sd_reader.sv
 add_file src/wondertang/sdcmd_ctrl.sv
@@ -85,9 +84,12 @@ add_file PSG_YM2149/YM2149.vhdl
 add_file denoise/denoise.vhd
 add_file monostable/monostable.vhd
 add_file src/gowin_clkdiv2/gowin_clkdiv2.vhd
+add_file src/ocm/fifo.vhd
 add_file src/ocm/lpf.vhd
 add_file src/ocm/scc_wave2.vhd
 add_file src/ocm/swioports.vhd
+add_file src/ocm/uart_lite.vhd
+add_file src/ocm/wifi_lite.vhd
 add_file tn_vdp_v3_v9958/src/ram.vhd
 add_file tn_vdp_v3_v9958/src/vdp/vdp.vhd
 add_file tn_vdp_v3_v9958/src/vdp/vdp_colordec.vhd
@@ -110,6 +112,7 @@ add_file tn_vdp_v3_v9958/src/vdp/vdp_wait_control.vhd
 add_file tn_vdp_v3_v9958/src/vdp/vencode.vhd
 add_file tang9k.cst
 add_file Z80_goauld.sdc
+add_file src/Z80_goauld.rao
 
 set_option -use_sspi_as_gpio 1 -use_mspi_as_gpio 1 -top_module top -verilog_std sysv2017 -include_path src
 run syn
